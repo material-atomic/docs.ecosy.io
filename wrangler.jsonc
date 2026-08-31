@@ -5,6 +5,12 @@
   "compatibility_flags": [
     "nodejs_compat"
   ],
+  "routes": [
+    {
+      "pattern": "docs.ecosy.io",
+      "custom_domain": true
+    }
+  ],
   "main": "vinext/server/fetch-handler",
   "assets": {
     "directory": "dist/client",
@@ -20,7 +26,7 @@
   "kv_namespaces": [
     {
       "binding": "VINEXT_KV_CACHE",
-      "id": "<your-kv-namespace-id>"
+      "id": "41ecfefa39a74a04a9c0b17cbea9ce0a"
     }
   ]
 }
