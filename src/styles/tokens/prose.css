@@ -1,0 +1,78 @@
+/* Layer 2 additions for long-form prose.
+   Colour values are var() references only — literals live in tokens/colors.css. */
+:root{
+  --prose-body:var(--foreground);
+  --prose-lead:var(--muted-foreground);
+  --prose-heading:var(--foreground);
+  --prose-link:var(--primary);
+  --prose-link-hover:var(--brand);
+  --prose-bold:var(--foreground);
+  --prose-counter:var(--muted-foreground);
+  --prose-bullet:var(--n-300);
+  --prose-hr:var(--border);
+  --prose-quote:var(--foreground);
+  --prose-quote-border:var(--brand);
+  --prose-caption:var(--muted-foreground);
+  --prose-code:var(--foreground);
+  --prose-code-bg:var(--muted);
+  /* Reads --code, which Layer 3 re-points per mode, so prose <pre> and CodeBlock are one surface. */
+  --prose-pre-bg:var(--code);
+  --prose-pre-fg:var(--code-foreground);
+  --prose-th-bg:var(--muted);
+
+  --prose-size:17px;
+  --prose-lh:1.7;
+  --prose-measure:68ch;
+  --prose-lead-size:20px;
+  --prose-h2:28px;
+  --prose-h3:22px;
+  --prose-h4:18px;
+  --prose-caption-size:13px;
+  --prose-space:var(--space-20);
+  --prose-space-lg:var(--space-40);
+}
+
+/* Long-form prose scale. The one place in the system where element selectors carry style. */
+.g-prose{color:var(--prose-body);font-family:var(--font-sans);font-size:var(--prose-size);line-height:var(--prose-lh);max-width:var(--prose-measure)}
+.g-prose>*{max-width:var(--prose-measure)}
+.g-prose>*+*{margin-top:var(--prose-space)}
+.g-prose>h2,.g-prose>h3,.g-prose>h4{color:var(--prose-heading);font-weight:var(--fw-bold);letter-spacing:var(--ls-heading);scroll-margin-top:var(--space-80)}
+.g-prose>h2{font-size:var(--prose-h2);line-height:1.25;margin-top:var(--prose-space-lg)}
+.g-prose>h3{font-size:var(--prose-h3);line-height:1.3;margin-top:var(--space-32)}
+.g-prose>h4{font-size:var(--prose-h4);line-height:1.35;margin-top:var(--space-24)}
+.g-prose>h2+*,.g-prose>h3+*,.g-prose>h4+*{margin-top:var(--space-12)}
+.g-prose .lead{color:var(--prose-lead);font-size:var(--prose-lead-size);line-height:1.55}
+.g-prose a{color:var(--prose-link);text-decoration:underline;text-underline-offset:2px;transition:color var(--t-control)}
+.g-prose a:hover{color:var(--prose-link-hover)}
+.g-prose strong{color:var(--prose-bold);font-weight:var(--fw-semibold)}
+.g-prose ul,.g-prose ol{padding-inline-start:var(--space-24);display:flex;flex-direction:column;gap:var(--space-8)}
+.g-prose ul{list-style:none;padding-inline-start:var(--space-20)}
+.g-prose ul>li{position:relative;padding-inline-start:var(--space-16)}
+.g-prose ul>li::before{content:"";position:absolute;inset-inline-start:0;inset-block-start:calc(var(--prose-lh) * 0.5em - 3px);width:6px;height:6px;border-radius:var(--radius-full);background:var(--prose-bullet)}
+.g-prose ol{list-style:decimal}
+.g-prose ol>li::marker{color:var(--prose-counter);font-family:var(--font-mono);font-size:0.9em}
+.g-prose blockquote{margin:0;padding-inline-start:var(--space-20);border-inline-start-width:var(--border-rule);border-inline-start-style:solid;border-inline-start-color:var(--prose-quote-border);color:var(--prose-quote);font-size:var(--prose-lead-size);line-height:1.5}
+.g-prose code{padding:2px 6px;background:var(--prose-code-bg);color:var(--prose-code);border-width:var(--border-hairline);border-style:solid;border-color:var(--border);border-radius:var(--radius-sm);font-family:var(--font-mono);font-size:0.85em}
+.g-prose pre{padding:var(--space-16) var(--space-20);background:var(--prose-pre-bg);color:var(--prose-pre-fg);border-radius:var(--radius-lg);overflow-x:auto;line-height:1.6}
+.g-prose pre code{padding:0;background:transparent;border:0;color:inherit;font-size:var(--text-mono)}
+.g-prose hr{height:var(--border-hairline);margin:var(--prose-space-lg) 0;border:0;background:var(--prose-hr)}
+/* A table cannot shrink below min-content, so one long <code> cell scrolls the PAGE unless the table
+   sits in its own scroll box. display:block + overflow-x on the table itself avoids requiring authors
+   to add a wrapper by hand — the border moves to the table so the rounded box still clips. */
+.g-prose table{display:block;width:100%;max-width:100%;overflow-x:auto;border-collapse:separate;border-spacing:0;font-size:var(--text-body-sm);border-width:var(--border-hairline);border-style:solid;border-color:var(--border);border-radius:var(--radius-lg)}
+.g-prose table>*{min-width:max-content}
+.g-prose thead,.g-prose tbody,.g-prose tfoot{display:table;width:100%}
+/* Identifiers in docs are long and unbroken; wrap them, but only inside code. */
+.g-prose code{overflow-wrap:anywhere}
+.g-prose th{background:var(--prose-th-bg);text-align:start;padding:var(--space-8) var(--space-16);font-family:var(--font-mono);font-size:var(--text-eyebrow);font-weight:var(--fw-bold);letter-spacing:var(--ls-eyebrow);text-transform:uppercase;color:var(--muted-foreground)}
+.g-prose td{padding:var(--space-12) var(--space-16);border-block-start-width:var(--border-hairline);border-block-start-style:solid;border-block-start-color:var(--border)}
+
+@media (max-width: 767px){
+  :root{--prose-size:16px;--prose-lead-size:18px;--prose-h2:24px}
+}
+
+/* ============ RTL ============ */
+[dir="rtl"] [data-icon-dir="mirror"]{transform:scaleX(-1)}
+.dir-ltr{direction:ltr;unicode-bidi:isolate;text-align:start}
+[dir="rtl"] .dir-ltr{text-align:end}
+/* No RTL overrides needed: the prose scale is written entirely in logical properties. */

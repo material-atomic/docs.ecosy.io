@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- 1. Drop Shadow cho hiệu ứng 3D lơ lửng -->
+    <filter id="premium-shadow" x="-10%" y="-10%" width="130%" height="130%">
+      <feDropShadow dx="12" dy="24" stdDeviation="20" flood-color="#00071A" flood-opacity="0.4" />
+    </filter>
+
+    <!-- 2. Glow effect cho các NPM Nodes -->
+    <filter id="neon-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="24" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+
+    <!-- 3. Gradients Cao cấp (Aurora Tech Palette) -->
+    <!-- Xương sống. Nâng sáng từ #002147/#2D0063: bản cũ chỉ đạt 1.14:1 so với
+         nền tối #0F1520, tức không nhìn thấy. Bản này 2.78:1, vẫn tối hơn ba
+         nhánh nên không cạnh tranh với chúng. -->
+    <linearGradient id="gradPillar" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2A5CA8" />
+      <stop offset="100%" stop-color="#6B3FC7" />
+    </linearGradient>
+
+    <!-- Nhánh trên: Tím Neon tới Xanh Cyan (Màu của sự hiện đại) -->
+    <linearGradient id="gradTop" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7B2CBF" />
+      <stop offset="100%" stop-color="#00F2FE" />
+    </linearGradient>
+
+    <!-- Nhánh giữa: Xanh Electric tới Xanh Lục (Màu của Eco) -->
+    <linearGradient id="gradMid" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0072FF" />
+      <stop offset="100%" stop-color="#00EA87" />
+    </linearGradient>
+
+    <!-- Nhánh dưới: Xanh Eco tới Vàng chanh (Sự phát triển) -->
+    <linearGradient id="gradBot" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00B4DB" />
+      <stop offset="100%" stop-color="#0083B0" />
+    </linearGradient>
+    
+    <!-- Gradient viền sáng (Rim Light) tạo cảm giác thuỷ tinh acrylic -->
+    <linearGradient id="glare" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.8" />
+      <stop offset="50%" stop-color="#FFFFFF" stop-opacity="0.1" />
+      <stop offset="100%" stop-color="#FFFFFF" stop-opacity="0.4" />
+    </linearGradient>
+  </defs>
+
+  <!-- TRỤC XƯƠNG SỐNG — gấp thành ">" -->
+  <!-- Hai đầu giữ nguyên vị trí cũ (112,112) và (112,912); điểm gấp đặt đúng đầu
+       phải của nhánh giữa (768,512). stroke-linejoin="round" chứ không phải miter:
+       ở góc 62.7° miter đẩy mũi ra tới x=983, round dừng ở 880. -->
+  <g filter="url(#premium-shadow)">
+    <path d="M 0 112 L 384 512 L 0 912"
+          fill="none" stroke="url(#gradPillar)" stroke-width="224"
+          stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <!-- NHÁNH DƯỚI (Bottom Arm) -->
+  <g filter="url(#premium-shadow)">
+    <!-- Width 912 + Offset 112 = Chạm đúng 1024 ở cạnh phải -->
+    <rect x="0" y="800" width="1024" height="224" rx="112" fill="url(#gradBot)" />
+    <!-- Viền Acrylic -->
+    <rect x="2" y="802" width="1020" height="220" rx="110" fill="none" stroke="url(#glare)" stroke-width="3" opacity="0.8" />
+  </g>
+
+  <!-- NHÁNH GIỮA (Middle Arm) -->
+  <g filter="url(#premium-shadow)">
+    <!-- Width 656 + Offset 112 = Dừng ở 768 -->
+    <rect x="0" y="400" width="768" height="224" rx="112" fill="url(#gradMid)" />
+    <!-- Viền Acrylic -->
+    <rect x="2" y="402" width="764" height="220" rx="110" fill="none" stroke="url(#glare)" stroke-width="3" opacity="0.8" />
+  </g>
+
+  <!-- NHÁNH TRÊN (Top Arm) -->
+  <g filter="url(#premium-shadow)">
+    <rect x="0" y="0" width="1024" height="224" rx="112" fill="url(#gradTop)" />
+    <!-- Viền Acrylic -->
+    <rect x="2" y="2" width="1020" height="220" rx="110" fill="none" stroke="url(#glare)" stroke-width="3" opacity="0.8" />
+  </g>
+
+  <!-- CÁC ĐIỂM NÚT (GLOWING NODES / NPM PACKAGES) -->
+  <!-- Nằm hoàn hảo trong Negative Space với khoảng cách gap exat 40px từ mọi hướng -->
+  <g filter="url(#neon-glow)">
+    <!-- Node Trên -->
+    <circle cx="856" cy="312" r="48" fill="#00EA87" />
+    <circle cx="856" cy="312" r="24" fill="#FFFFFF" opacity="0.8"/>
+    
+    <!-- Node Dưới -->
+    <circle cx="856" cy="712" r="48" fill="#00F2FE" />
+    <circle cx="856" cy="712" r="24" fill="#FFFFFF" opacity="0.8"/>
+  </g>
+
+</svg>

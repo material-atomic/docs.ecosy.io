@@ -1,0 +1,8 @@
+/* 1px hairline default, 2px brand-emphasised edge, one 3px accent rule. */
+:root{
+  --border-hairline:1px;
+  --border-emphasis:2px;
+  --border-rule:3px;
+  --focus-ring-width:2px;
+  --focus-ring-offset:2px;
+}

@@ -1,0 +1,25 @@
+/* Every shadow is a color-mix() against --p-900, so elevation follows the active theme. */
+:root{
+  --shadow-tint:color-mix(in srgb, var(--p-900) 14%, transparent);
+  --shadow-tint-soft:color-mix(in srgb, var(--p-900) 8%, transparent);
+  --shadow-tint-deep:color-mix(in srgb, var(--p-900) 22%, transparent);
+
+  --rim:transparent;
+  --rim-shadow:0 0 0 0 transparent;
+
+  --shadow-xs:var(--rim-shadow), 0 1px 1px var(--shadow-tint-soft);
+  --shadow-sm:var(--rim-shadow), 0 1px 2px var(--shadow-tint-soft), 0 1px 3px var(--shadow-tint-soft);
+  --shadow-md:var(--rim-shadow), 0 2px 4px var(--shadow-tint-soft), 0 4px 12px var(--shadow-tint);
+  --shadow-lg:var(--rim-shadow), 0 4px 8px var(--shadow-tint-soft), 0 12px 28px var(--shadow-tint);
+  --shadow-overlay:var(--rim-shadow), 0 8px 16px var(--shadow-tint), 0 24px 56px var(--shadow-tint-deep);
+
+  --scrim:color-mix(in srgb, var(--p-900) 55%, transparent);
+  --scrim-blur:6px;
+}
+.dark{
+  --shadow-tint:color-mix(in srgb, var(--n-900) 55%, transparent);
+  --shadow-tint-soft:color-mix(in srgb, var(--n-900) 38%, transparent);
+  --shadow-tint-deep:color-mix(in srgb, var(--n-900) 72%, transparent);
+  --rim:color-mix(in srgb, var(--foreground) 9%, transparent);
+  --rim-shadow:inset 0 1px 0 var(--rim);
+}

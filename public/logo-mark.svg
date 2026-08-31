@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-label="ecosy">
+  <title>ecosy</title>
+  <defs>
+    <!-- Rút gọn từ logo.svg cho cỡ nhỏ: bỏ drop shadow, neon glow, viền acrylic
+         và hai node — ở 16–32px chúng chỉ làm nhoè phần còn đọc được. -->
+    <!-- Xương sống. Nâng sáng từ #002147/#2D0063: bản cũ chỉ đạt 1.14:1 so với
+         nền tối #0F1520, tức không nhìn thấy. Bản này 2.78:1, vẫn tối hơn ba
+         nhánh nên không cạnh tranh với chúng. -->
+    <linearGradient id="gradPillar" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2A5CA8" />
+      <stop offset="100%" stop-color="#6B3FC7" />
+    </linearGradient>
+
+    <!-- Nhánh trên: Tím Neon tới Xanh Cyan (Màu của sự hiện đại) -->
+    <linearGradient id="gradTop" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#7B2CBF" />
+      <stop offset="100%" stop-color="#00F2FE" />
+    </linearGradient>
+
+    <!-- Nhánh giữa: Xanh Electric tới Xanh Lục (Màu của Eco) -->
+    <linearGradient id="gradMid" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#0072FF" />
+      <stop offset="100%" stop-color="#00EA87" />
+    </linearGradient>
+
+    <!-- Nhánh dưới: Xanh Eco tới Vàng chanh (Sự phát triển) -->
+    <linearGradient id="gradBot" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#00B4DB" />
+      <stop offset="100%" stop-color="#0083B0" />
+    </linearGradient>
+    
+    <!-- Gradient viền sáng (Rim Light) tạo cảm giác thuỷ tinh acrylic -->
+  </defs>
+
+  <!-- TRỤC XƯƠNG SỐNG — gấp thành ">" -->
+  <!-- Hai đầu giữ nguyên vị trí cũ (112,112) và (112,912); điểm gấp đặt đúng đầu
+       phải của nhánh giữa (768,512). stroke-linejoin="round" chứ không phải miter:
+       ở góc 62.7° miter đẩy mũi ra tới x=983, round dừng ở 880. -->
+  <g>
+    <path d="M 0 112 L 384 512 L 0 912"
+          fill="none" stroke="url(#gradPillar)" stroke-width="224"
+          stroke-linecap="round" stroke-linejoin="round" />
+  </g>
+
+  <!-- NHÁNH DƯỚI (Bottom Arm) -->
+  <g>
+    <!-- Width 912 + Offset 112 = Chạm đúng 1024 ở cạnh phải -->
+    <rect x="0" y="800" width="1024" height="224" rx="112" fill="url(#gradBot)" />
+  </g>
+
+  <!-- NHÁNH GIỮA (Middle Arm) -->
+  <g>
+    <!-- Width 656 + Offset 112 = Dừng ở 768 -->
+    <rect x="0" y="400" width="768" height="224" rx="112" fill="url(#gradMid)" />
+  </g>
+
+  <!-- NHÁNH TRÊN (Top Arm) -->
+  <g>
+    <rect x="0" y="0" width="1024" height="224" rx="112" fill="url(#gradTop)" />
+  </g>
+
+</svg>

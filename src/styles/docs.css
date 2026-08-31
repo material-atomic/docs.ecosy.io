@@ -1,0 +1,862 @@
+/* ============================================================
+   docs/ — the documentation UI group.
+   Every component carries data-slot="docs-*" so a consumer can override it.
+   Container queries, never media queries, for the shell. Logical properties
+   throughout so RTL needs no second stylesheet.
+   ============================================================ */
+
+/* ---------- page width ----------
+   Derived, not chosen. One post is at most an A4 page at 96 px/inch, and the
+   shell columns are added to that — so the number changes on its own if a
+   column width does, and nothing has to be kept in step by hand.
+
+     260 nav + 40 gap + 794 post = 1094, plus 24 padding each side = 1142.
+
+   There is no third column in the sum, so there is no third column: an "On this
+   page" rail would take 240px out of the post and drop it to 554.
+
+   Every page uses it, home and the catalogue pages included. */
+:root {
+  --page-post: 794px;
+  --page-nav: 260px;
+  --page-gap: var(--space-40);
+  --page-pad: var(--space-24);
+  --page-max: calc(var(--page-nav) + var(--page-gap) + var(--page-post));
+}
+
+/* ---------- topbar ---------- */
+
+.docs-topbar {
+  position: sticky;
+  inset-block-start: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: var(--space-16);
+  height: 56px;
+  padding-inline: var(--space-24);
+  background: color-mix(in srgb, var(--background) 88%, transparent);
+  backdrop-filter: blur(8px);
+  border-block-end: var(--border-hairline) solid var(--border);
+}
+
+.docs-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-heading);
+  color: var(--foreground);
+  text-decoration: none;
+}
+.docs-brand:hover { color: var(--foreground); }
+.docs-brand-mark {
+  display: inline-flex;
+  flex: none;
+}
+
+
+.docs-topbar-spacer { flex: 1; }
+
+.docs-topnav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-inline-start: var(--space-20);
+}
+.docs-topnav a {
+  padding: var(--space-4) var(--space-12);
+  border-radius: var(--radius-md);
+  color: var(--muted-foreground);
+  font-size: var(--text-body-sm);
+  font-weight: var(--fw-medium);
+  text-decoration: none;
+  transition: color var(--t-control), background var(--t-control);
+}
+.docs-topnav a:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+
+.docs-group-header { margin-block-start: var(--space-64); }
+
+
+/* Search trigger — reads as an input, behaves as a button. */
+.docs-search-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-8);
+  width: 240px;
+  height: var(--control-h-sm);
+  padding-inline: var(--space-8) var(--space-4);
+  border: var(--border-hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--muted-foreground);
+  font: inherit;
+  font-size: var(--text-body-sm);
+  cursor: pointer;
+  transition: border-color var(--t-control), color var(--t-control);
+}
+.docs-search-trigger:hover { border-color: var(--track-strong); color: var(--foreground); }
+.docs-search-trigger span { flex: 1; text-align: start; }
+
+.docs-kbd {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 6px;
+  border: var(--border-hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1;
+}
+
+.docs-icon-button {
+  display: grid;
+  place-items: center;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  border: var(--border-hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  transition: color var(--t-control), border-color var(--t-control);
+}
+.docs-icon-button:hover { color: var(--foreground); border-color: var(--track-strong); }
+.docs-icon-button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* ---------- shell ----------
+   The container is named on this ANCESTOR wrapper, never on .docs-shell itself:
+   a container query only matches DESCENDANTS of the element establishing the
+   container, so a shell that names its own container can never query itself. */
+
+.docs-scope {
+  container-type: inline-size;
+  container-name: docs;
+  max-width: calc(var(--page-max) + var(--page-pad) * 2);
+  margin-inline: auto;
+  padding-inline: var(--page-pad);
+}
+
+.docs-shell {
+  display: grid;
+  grid-template-columns: var(--page-nav) minmax(0, 1fr);
+  gap: var(--page-gap);
+  align-items: start;
+}
+
+.docs-nav-col {
+  position: sticky;
+  inset-block-start: 56px;
+  max-height: calc(100vh - 56px);
+  overflow-y: auto;
+  padding-block: var(--space-32);
+  scrollbar-width: thin;
+}
+
+.docs-main {
+  min-width: 0;
+  padding-block: var(--space-32) var(--space-96);
+}
+
+.docs-nav-toggle { display: none; }
+
+/* Topbar chrome sits OUTSIDE .docs-scope, so a container query cannot select it.
+   The scope is min(--page-max, 100vw - 48px) wide; below its own maximum that is
+   just 100vw - 48, so the shell's 767px breakpoint is a 815px viewport. */
+@media (max-width: 815px) {
+  .docs-nav-toggle { display: inline-grid; }
+  .docs-topnav { display: none; }
+  .docs-search-trigger { width: auto; }
+  .docs-search-trigger span,
+  .docs-search-trigger .docs-kbd { display: none; }
+  .docs-topbar { padding-inline: var(--space-16); gap: var(--space-8); }
+}
+@media (max-width: 479px) {
+  .docs-topbar .docs-icon-button[href] { display: none; }
+}
+
+@container docs (max-width: 767px) {
+  .docs-shell { grid-template-columns: minmax(0, 1fr); }
+  .docs-nav-col {
+    position: fixed;
+    inset-block: 56px 0;
+    inset-inline-start: 0;
+    z-index: 45;
+    width: min(300px, 84vw);
+    max-height: none;
+    padding: var(--space-24);
+    background: var(--sidebar);
+    border-inline-end: var(--border-hairline) solid var(--sidebar-border);
+    box-shadow: var(--shadow-lg);
+    transform: translateX(-102%);
+    transition: transform var(--t-surface);
+  }
+  [dir="rtl"] .docs-nav-col { transform: translateX(102%); }
+  .docs-nav-col[data-open="true"] { transform: none; }
+  .docs-nav-toggle { display: inline-grid; }
+}
+
+.docs-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  background: var(--scrim);
+  backdrop-filter: blur(var(--scrim-blur));
+}
+
+/* ---------- DocsNav ----------
+   A documentation tree: indented, with a vertical rule. No pills, no flyouts —
+   those are application-navigation conventions and read wrong here. */
+
+.docs-nav-title {
+  margin-block-end: var(--space-16);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.docs-nav-group + .docs-nav-group { margin-block-start: var(--space-24); }
+
+.docs-nav-group-label {
+  margin-block-end: var(--space-8);
+  font-size: var(--text-caption);
+  font-weight: var(--fw-semibold);
+  color: var(--muted-foreground);
+}
+
+.docs-nav-list { margin: 0; padding: 0; list-style: none; }
+
+.docs-nav-link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: 5px var(--space-8);
+  border-inline-start: var(--border-emphasis) solid transparent;
+  margin-inline-start: -1px;
+  color: var(--muted-foreground);
+  font-size: var(--text-body-sm);
+  line-height: 1.45;
+  text-decoration: none;
+  transition: color var(--t-control), border-color var(--t-control);
+}
+.docs-nav-link:hover { color: var(--foreground); }
+.docs-nav-link[aria-current="page"] {
+  color: var(--primary);
+  font-weight: var(--fw-semibold);
+  border-inline-start-color: var(--primary);
+}
+.docs-nav-link > span:first-of-type { flex: 1; }
+.docs-nav-link .docs-badge { flex: none; }
+
+/* Child level: one more indent, and the rule continues down the group. */
+.docs-nav-children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  margin-inline-start: var(--space-12);
+  border-inline-start: var(--border-hairline) solid var(--border);
+}
+.docs-nav-children .docs-nav-link { padding-inline-start: var(--space-16); }
+
+/* ---------- Badge ---------- */
+
+.docs-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.docs-badge[data-kind="beta"] { background: var(--a-100); color: var(--a-800); }
+.docs-badge[data-kind="stable"] { background: var(--green-100); color: var(--green-700); }
+.docs-badge[data-kind="deprecated"] { background: var(--red-100); color: var(--red-700); }
+.docs-badge[data-kind="module"],
+.docs-badge[data-kind="framework"],
+.docs-badge[data-kind="fork"] { background: var(--secondary); color: var(--secondary-foreground); }
+.dark .docs-badge[data-kind="beta"] { background: color-mix(in srgb, var(--a-500) 22%, transparent); color: var(--a-200); }
+.dark .docs-badge[data-kind="stable"] { background: color-mix(in srgb, var(--green-600) 22%, transparent); color: var(--green-100); }
+.dark .docs-badge[data-kind="deprecated"] { background: color-mix(in srgb, var(--red-600) 22%, transparent); color: var(--red-100); }
+
+/* ---------- DocsPageHeader ---------- */
+
+.docs-page-header {
+  padding-block-end: var(--space-24);
+  margin-block-end: var(--space-32);
+  border-block-end: var(--border-hairline) solid var(--border);
+}
+
+.docs-eyebrow {
+  display: block;
+  margin-block-end: var(--space-8);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.docs-page-header h1 { font-size: var(--text-h1); line-height: var(--lh-h1); }
+.docs-page-header .docs-lead {
+  margin-block-start: var(--space-12);
+  max-width: var(--measure-max);
+  color: var(--muted-foreground);
+  font-size: var(--prose-lead-size);
+  line-height: 1.5;
+}
+
+.docs-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-12);
+  margin-block-start: var(--space-16);
+  font-size: var(--text-caption);
+  color: var(--muted-foreground);
+}
+.docs-meta a { color: var(--muted-foreground); }
+.docs-meta a:hover { color: var(--brand); }
+.docs-meta-sep { color: var(--separator); }
+
+/* ---------- ApiHeading anchors ----------
+   The # appears on hover and copies the deep link. */
+
+.docs-anchor {
+  margin-inline-start: var(--space-8);
+  color: var(--muted-foreground);
+  font-weight: var(--fw-regular);
+  text-decoration: none;
+  opacity: 0;
+  transition: opacity var(--t-control), color var(--t-control);
+}
+.g-prose h2:hover .docs-anchor,
+.g-prose h3:hover .docs-anchor,
+.docs-anchor:focus-visible { opacity: 1; }
+.docs-anchor:hover { color: var(--brand); }
+
+/* ---------- CodeBlock ----------
+   No syntax highlighting by colour: the system has no palette for it, and
+   hardcoding one would break "components read Layer 2 only". */
+
+.docs-code {
+  position: relative;
+  border: var(--border-hairline) solid var(--code-border);
+  border-radius: var(--radius-lg);
+  background: var(--code);
+  overflow: hidden;
+}
+.docs-code pre {
+  margin: 0;
+  padding: var(--space-16) var(--space-20);
+  background: transparent;
+  color: var(--code-foreground);
+  overflow-x: auto;
+  line-height: 1.6;
+}
+.docs-code pre code { font-size: var(--text-mono); }
+
+.docs-code-lang {
+  position: absolute;
+  inset-block-start: var(--space-8);
+  inset-inline-end: 44px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--code-gutter);
+  pointer-events: none;
+}
+
+.docs-copy {
+  position: absolute;
+  inset-block-start: var(--space-8);
+  inset-inline-end: var(--space-8);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--t-control), color var(--t-control), border-color var(--t-control);
+}
+.docs-code:hover .docs-copy,
+.docs-copy:focus-visible { opacity: 1; }
+.docs-copy:hover { color: var(--foreground); border-color: var(--border); }
+.docs-copy[data-copied="true"] { color: var(--success); opacity: 1; }
+
+/* ---------- CodeTabs ----------
+   The install block: one row of package managers over a shared code surface.
+   Same tokens as .docs-code so the two read as one family. */
+
+.docs-tabs {
+  width: fit-content;
+  /* fit-content leaves the bar no slack, so `margin-inline-start: auto` on the
+     copy button has nothing to push into and it lands against the last tab. */
+  min-width: min(100%, 300px);
+  max-width: 100%;
+  border: var(--border-hairline) solid var(--code-border);
+  border-radius: var(--radius-lg);
+  background: var(--code);
+  overflow: hidden;
+}
+
+.docs-tabs-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) var(--space-4) var(--space-8);
+  border-block-end: var(--border-hairline) solid var(--code-border);
+}
+
+.docs-tab {
+  padding: var(--space-4) var(--space-12);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color var(--t-control), background var(--t-control);
+}
+.docs-tab:hover { color: var(--foreground); }
+.docs-tab[aria-selected="true"] {
+  background: var(--background);
+  color: var(--foreground);
+  font-weight: var(--fw-semibold);
+}
+.docs-tab:focus-visible {
+  outline: var(--focus-ring-width) solid var(--ring);
+  outline-offset: -2px;
+}
+
+/* The copy button sits in the tab row rather than floating over the code, so it
+   never covers a line. */
+.docs-tabs-bar .docs-copy {
+  position: static;
+  opacity: 1;
+  margin-inline-start: auto;
+  flex: none;
+}
+
+.docs-tabs pre {
+  margin: 0;
+  padding: var(--space-16) var(--space-20);
+  overflow-x: auto;
+  line-height: 1.6;
+  color: var(--code-foreground);
+}
+.docs-tabs pre code { font-size: var(--text-mono); }
+
+/* ---------- DocsPager ---------- */
+
+.docs-pager {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-16);
+  margin-block-start: var(--space-64);
+  padding-block-start: var(--space-32);
+  border-block-start: var(--border-hairline) solid var(--border);
+}
+@container docs (max-width: 639px) {
+  .docs-pager { grid-template-columns: minmax(0, 1fr); }
+}
+
+.docs-pager-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-16);
+  border: var(--border-hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  text-decoration: none;
+  transition: border-color var(--t-control), box-shadow var(--t-control);
+}
+.docs-pager-card:hover { border-color: var(--track-strong); box-shadow: var(--shadow-sm); }
+.docs-pager-card[data-dir="next"] { text-align: end; grid-column: 2; }
+@container docs (max-width: 639px) {
+  .docs-pager-card[data-dir="next"] { grid-column: auto; }
+}
+.docs-pager-dir { font-size: var(--text-caption); color: var(--muted-foreground); }
+.docs-pager-title { color: var(--foreground); font-weight: var(--fw-semibold); }
+.docs-pager-card:hover .docs-pager-title { color: var(--primary); }
+
+/* ---------- hero ----------
+   The docs landing. Goes ships marketing/hero/* for selling a product; this is
+   the reference-site equivalent: name, one sentence, one way in. Flat colour
+   only — no gradient, no mesh — and a single brand button, per the system's
+   rule that the amber accent appears at most once per view. */
+
+.docs-hero {
+  padding-block: var(--space-80) var(--space-64);
+  border-block-end: var(--border-hairline) solid var(--border);
+}
+
+/* Split, not centred: the left column carries the entry point, the right shows
+   what the code actually looks like. At one column the sample follows the
+   actions rather than being dropped — it is the most useful thing here. */
+.docs-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 520px);
+  gap: var(--space-64);
+  align-items: center;
+}
+@container docs (max-width: 1023px) {
+  .docs-hero-grid { grid-template-columns: minmax(0, 1fr); gap: var(--space-40); }
+}
+
+.docs-hero-figure {
+  /* <figure> carries a UA margin of 1em 40px; .g-prose resets it but this one is
+     outside prose. */
+  margin: 0;
+  border: var(--border-hairline) solid var(--code-border);
+  border-radius: var(--radius-lg);
+  background: var(--code);
+  overflow: hidden;
+}
+.docs-hero-figure-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-16);
+  border-block-end: var(--border-hairline) solid var(--code-border);
+  font-family: var(--font-mono);
+  font-size: var(--text-eyebrow);
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+.docs-hero-figure pre {
+  margin: 0;
+  padding: var(--space-16) var(--space-20);
+  overflow-x: auto;
+  line-height: 1.65;
+  color: var(--code-foreground);
+}
+.docs-hero-figure code { font-size: var(--text-mono); }
+
+.docs-hero-eyebrow {
+  display: block;
+  margin-block-end: var(--space-20);
+  font-size: var(--text-eyebrow);
+  font-weight: var(--fw-bold);
+  letter-spacing: var(--ls-eyebrow);
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.docs-hero-title {
+  margin: 0;
+  font-size: var(--text-display);
+  line-height: var(--lh-display);
+  letter-spacing: var(--ls-display);
+  font-weight: var(--fw-black);
+}
+
+.docs-hero-lead {
+  max-width: 52ch;
+  margin-block-start: var(--space-20);
+  color: var(--muted-foreground);
+  font-size: var(--prose-lead-size);
+  line-height: 1.55;
+}
+
+.docs-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-12);
+  margin-block-start: var(--space-32);
+}
+
+/* Button anatomy from the system: 38px control height, md radius, hairline
+   border, 140ms state transition. */
+.docs-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--gap-icon-label);
+  height: var(--control-h);
+  padding-inline: var(--space-20);
+  border: var(--border-hairline) solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--text-label);
+  font-weight: var(--fw-label);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background var(--t-control), border-color var(--t-control), color var(--t-control);
+}
+.docs-button[data-variant="brand"] {
+  background: var(--brand);
+  color: var(--brand-foreground);
+}
+.docs-button[data-variant="brand"]:hover {
+  background: var(--brand-hover);
+  color: var(--brand-foreground);
+}
+.docs-button[data-variant="outline"] {
+  border-color: var(--border);
+  background: var(--card);
+  color: var(--foreground);
+}
+.docs-button[data-variant="outline"]:hover {
+  border-color: var(--track-strong);
+  color: var(--foreground);
+}
+.docs-button:focus-visible {
+  outline: var(--focus-ring-width) solid var(--ring);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* The install line reads as a terminal, so it uses the code surface rather than
+   the card surface — same tokens as every code block on the site. */
+.docs-hero .docs-tabs { margin-block-start: var(--space-32); }
+
+.docs-hero-install {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-12);
+  width: fit-content;
+  max-width: 100%;
+  margin-block-start: var(--space-32);
+  padding: var(--space-12) var(--space-16);
+  border: var(--border-hairline) solid var(--code-border);
+  border-radius: var(--radius-lg);
+  background: var(--code);
+}
+.docs-hero-install code {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  color: var(--code-foreground);
+  overflow-x: auto;
+}
+.docs-hero-install .docs-prompt {
+  color: var(--code-gutter);
+  user-select: none;
+}
+.docs-hero-install .docs-copy {
+  position: static;
+  opacity: 1;
+  flex: none;
+}
+
+@container docs (max-width: 639px) {
+  .docs-hero { padding-block: var(--space-48) var(--space-40); }
+  .docs-hero-title { font-size: var(--text-h1); line-height: var(--lh-h1); }
+  .docs-hero-actions .docs-button { flex: 1; justify-content: center; }
+}
+
+/* ---------- syntax ----------
+   Class per token kind, colour from the Layer 2 --code-* set, so both modes and
+   all eight themes follow without a second palette. */
+.tok-keyword     { color: var(--code-keyword); }
+.tok-string      { color: var(--code-string); }
+.tok-number      { color: var(--code-number); }
+.tok-type        { color: var(--code-type); }
+.tok-function    { color: var(--code-function); }
+.tok-comment     { color: var(--code-comment); font-style: italic; }
+.tok-punctuation { color: var(--code-punctuation); }
+
+/* ---------- window chrome ----------
+   The hero sample is drawn as a window: three dots and the file path as title. */
+.docs-hero-figure-dots {
+  display: inline-flex;
+  gap: 6px;
+  flex: none;
+}
+.docs-hero-figure-dots i {
+  width: 10px;
+  height: 10px;
+  border-radius: var(--radius-full);
+  background: var(--track-strong);
+  opacity: 0.55;
+}
+.docs-hero-figure-dots i:nth-child(1) { background: var(--destructive); }
+.docs-hero-figure-dots i:nth-child(2) { background: var(--warning); }
+.docs-hero-figure-dots i:nth-child(3) { background: var(--success); }
+
+.docs-hero-figure-bar {
+  gap: var(--space-12);
+}
+.docs-hero-figure-title {
+  flex: 1;
+  text-align: center;
+  padding-inline-end: 46px;   /* balance the dots so the title sits centred */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------- home introduction ---------- */
+
+.docs-intro {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-32);
+  padding-block: var(--space-64) var(--space-48);
+}
+.docs-intro .g-prose > h2:first-child { margin-top: 0; }
+
+.docs-intro-code .docs-code { max-width: var(--measure-max); }
+
+.docs-intro-links {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-16);
+  padding-block-end: var(--space-96);
+}
+@container docs (max-width: 767px) {
+  .docs-intro-links { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- catalogue ---------- */
+
+.docs-catalogue { padding-block: 0 var(--space-96); }
+
+.docs-catalogue-lead {
+  max-width: var(--measure-max);
+  margin-block-start: var(--space-16);
+  color: var(--muted-foreground);
+  font-size: var(--prose-lead-size);
+  line-height: 1.55;
+}
+
+.docs-group { margin-block-start: var(--space-64); }
+.docs-group-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-12);
+  margin-block-end: var(--space-20);
+}
+.docs-group-head h2 { font-size: var(--text-h3); }
+.docs-group-count { font-family: var(--font-mono); font-size: var(--text-caption); color: var(--muted-foreground); }
+
+.docs-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-16);
+}
+@container docs (max-width: 1023px) { .docs-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container docs (max-width: 639px) { .docs-cards { grid-template-columns: minmax(0, 1fr); } }
+
+.docs-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-8);
+  padding: var(--pad-card);
+  border: var(--border-hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  text-decoration: none;
+  transition: border-color var(--t-control), box-shadow var(--t-control);
+}
+.docs-card:hover { border-color: var(--track-strong); box-shadow: var(--shadow-sm); }
+.docs-card-head { display: flex; align-items: center; gap: var(--space-8); }
+.docs-card-name {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--text-body-sm);
+  font-weight: var(--fw-semibold);
+  color: var(--foreground);
+}
+.docs-card:hover .docs-card-name { color: var(--primary); }
+.docs-card-summary {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-body-sm);
+  line-height: var(--lh-body-sm);
+}
+
+/* ---------- Command palette ---------- */
+
+.docs-cmd[hidden] { display: none; }
+.docs-cmd {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: start center;
+  padding-block-start: 12vh;
+  background: var(--scrim);
+  backdrop-filter: blur(var(--scrim-blur));
+}
+.docs-cmd-panel {
+  width: min(560px, 92vw);
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  border: var(--border-hairline) solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--popover);
+  box-shadow: var(--shadow-overlay);
+  overflow: hidden;
+}
+.docs-cmd-input {
+  height: var(--control-h-lg);
+  padding-inline: var(--space-16);
+  border: 0;
+  border-block-end: var(--border-hairline) solid var(--border);
+  background: transparent;
+  color: var(--popover-foreground);
+  font: inherit;
+  font-size: var(--text-body);
+  outline: none;
+}
+.docs-cmd-list { margin: 0; padding: var(--space-8); list-style: none; overflow-y: auto; }
+.docs-cmd-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-8);
+  padding: var(--space-8) var(--space-12);
+  border-radius: var(--radius-md);
+  color: var(--popover-foreground);
+  font-size: var(--text-body-sm);
+  text-decoration: none;
+  cursor: pointer;
+}
+.docs-cmd-item[data-active="true"] { background: var(--accent); color: var(--accent-foreground); }
+.docs-cmd-item .docs-cmd-path { flex: 1; color: var(--muted-foreground); font-size: var(--text-caption); text-align: end; }
+.docs-cmd-empty { padding: var(--space-24); text-align: center; color: var(--muted-foreground); font-size: var(--text-body-sm); }
+
+/* ---------- footer ---------- */
+
+.docs-footer {
+  border-block-start: var(--border-hairline) solid var(--border);
+  padding-block: var(--space-32);
+  color: var(--muted-foreground);
+  font-size: var(--text-caption);
+}
+.docs-footer-inner {
+  max-width: calc(var(--page-max) + var(--page-pad) * 2);
+  margin-inline: auto;
+  padding-inline: var(--page-pad);
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-16);
+  align-items: center;
+}
+.docs-footer-inner a { color: var(--muted-foreground); }
+.docs-footer-inner a:hover { color: var(--brand); }
+/* The footer renders in the layout, outside .docs-scope, so it takes a media
+   query — a container query there selects nothing. */
+.docs-footer-credit { margin-inline-start: auto; }
+@media (max-width: 639px) { .docs-footer-credit { margin-inline-start: 0; } }

@@ -1,0 +1,3 @@
+/* Inter + JetBrains Mono — both SIL Open Font License 1.1.
+   The stylesheet itself is linked from app/layout.tsx. */
+:root{--font-sans:'Inter','Helvetica Neue',system-ui,sans-serif;--font-mono:'JetBrains Mono',ui-monospace,'SFMono-Regular',monospace}

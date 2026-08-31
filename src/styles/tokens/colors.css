@@ -1,0 +1,166 @@
+/* Goes — colour system. THIS IS THE ONLY FILE IN THE SYSTEM ALLOWED TO CONTAIN A LITERAL COLOUR.
+   LAYER 1  raw ramps (hex)          LAYER 2  shadcn contract (var() only)
+   LAYER 3  [data-theme] re-defines LAYER 1 only; .dark re-points LAYER 2 only. */
+
+/* ============ LAYER 1 — base ramps (default theme: blue) ============ */
+:root {
+  --p-900: #06182E; --p-800: #0A2440; --p-700: #103356; --p-600: #16456F; --p-500: #1E5A8F;
+  --p-400: #3B7CB5; --p-300: #7FAAD1; --p-200: #BFD5E7; --p-100: #E6EEF6; --p-050: #F3F7FB;
+  --a-900: #4E2E06; --a-800: #6A3E09; --a-700: #8A520D; --a-600: #A66211; --a-500: #B87514;
+  --a-400: #D4901F; --a-300: #E8B45C; --a-200: #F4D9A8; --a-100: #FBF1DE;
+  --n-900: #0F1520; --n-800: #1C2331; --n-700: #2C3545; --n-600: #414B5E; --n-500: #5A657A;
+  --n-400: #7C879A; --n-300: #A9B3C4; --n-200: #CDD4E0; --n-100: #E4E8EF; --n-075: #F1F3F7;
+  --n-050: #F8F9FB; --n-0: #FFFFFF;
+  --green-700: #15803D; --green-600: #16A34A; --green-100: #DCFCE7;
+  --red-700: #B91C1C; --red-600: #DC2626; --red-100: #FEE2E2;
+}
+
+/* ============ LAYER 2 — the shadcn/ui token contract ============ */
+:root {
+  --background: var(--n-0);
+  --foreground: var(--n-900);
+  --card: var(--n-0);
+  --card-foreground: var(--n-900);
+  --popover: var(--n-0);
+  --popover-foreground: var(--n-900);
+  --primary: var(--p-700);
+  --primary-foreground: var(--n-0);
+  --secondary: var(--n-075);
+  --secondary-foreground: var(--n-800);
+  --muted: var(--n-050);
+  --muted-foreground: var(--n-500);
+  --accent: var(--n-075);
+  --accent-foreground: var(--n-800);
+  --destructive: var(--red-700);
+  --destructive-foreground: var(--n-0);
+  --border: var(--n-200);
+  --input: var(--n-200);
+  --ring: var(--p-500);
+  --sidebar: var(--n-050);
+  --sidebar-foreground: var(--n-800);
+  --sidebar-primary: var(--p-700);
+  --sidebar-primary-foreground: var(--n-0);
+  --sidebar-accent: var(--n-100);
+  --sidebar-accent-foreground: var(--n-900);
+  --sidebar-border: var(--n-200);
+  --sidebar-ring: var(--p-500);
+  --brand: var(--a-700);
+  --brand-foreground: var(--n-0);
+  --brand-hover: var(--a-800);
+  --brand-press: var(--a-900);
+  --success: var(--green-700);
+  --success-foreground: var(--n-0);
+  --warning: var(--a-700);
+  --warning-foreground: var(--n-0);
+  --text-disabled: var(--n-300);
+  --track: var(--n-200);
+  --track-strong: var(--n-400);
+  --thumb: var(--n-0);
+  --separator: var(--n-300);
+  --counter: var(--n-200);
+  --counter-foreground: var(--n-700);
+  --tooltip: var(--n-900);
+  --tooltip-foreground: var(--n-050);
+  --code: var(--muted);
+  --code-foreground: var(--foreground);
+  --code-border: var(--border);
+  --code-gutter: var(--n-300);
+  --code-highlight: var(--a-100);
+  --code-highlight-edge: var(--brand);
+  /* Syntax palette. Layer 2, so every value is a var() into a Layer 1 ramp —
+     the system has no separate syntax hues and inventing literals here would
+     break the one rule colors.css states about itself. */
+  --code-keyword: var(--p-600);
+  --code-string: var(--green-700);
+  --code-number: var(--a-700);
+  --code-type: var(--a-600);
+  --code-function: var(--p-500);
+  --code-comment: var(--n-400);
+  --code-punctuation: var(--n-500);
+}
+
+/* ============ LAYER 3a — .dark ============ */
+.dark {
+  --background: var(--n-900);
+  --foreground: var(--n-100);
+  --card: var(--n-800);
+  --card-foreground: var(--n-100);
+  --popover: var(--n-800);
+  --popover-foreground: var(--n-100);
+  --primary: var(--p-200);
+  --primary-foreground: var(--p-900);
+  --secondary: var(--n-700);
+  --secondary-foreground: var(--n-100);
+  --muted: var(--n-800);
+  --muted-foreground: var(--n-300);
+  --accent: var(--n-700);
+  --accent-foreground: var(--n-050);
+  --destructive: var(--red-600);
+  --destructive-foreground: var(--n-0);
+  --border: var(--n-700);
+  --input: var(--n-700);
+  --ring: var(--p-300);
+  --sidebar: var(--n-800);
+  --sidebar-foreground: var(--n-100);
+  --sidebar-primary: var(--p-200);
+  --sidebar-primary-foreground: var(--p-900);
+  --sidebar-accent: var(--n-700);
+  --sidebar-accent-foreground: var(--n-050);
+  --sidebar-border: var(--n-700);
+  --sidebar-ring: var(--p-300);
+  --brand: var(--a-300);
+  --brand-foreground: var(--n-900);
+  --brand-hover: var(--a-200);
+  --brand-press: var(--a-100);
+  --success: var(--green-600);
+  --success-foreground: var(--n-900);
+  --warning: var(--a-300);
+  --warning-foreground: var(--n-900);
+  --text-disabled: var(--n-500);
+  --track: var(--n-700);
+  --track-strong: var(--n-500);
+  --thumb: var(--n-100);
+  --separator: var(--n-600);
+  --counter: var(--n-700);
+  --counter-foreground: var(--n-100);
+  --tooltip: var(--n-050);
+  --tooltip-foreground: var(--n-900);
+  --code: var(--n-800);
+  --code-foreground: var(--n-100);
+  --code-border: var(--n-700);
+  --code-gutter: var(--n-600);
+  --code-highlight: color-mix(in srgb, var(--a-500) 18%, transparent);
+  --code-highlight-edge: var(--a-400);
+  --code-keyword: var(--p-300);
+  --code-string: var(--green-600);
+  --code-number: var(--a-300);
+  --code-type: var(--a-200);
+  --code-function: var(--p-200);
+  --code-comment: var(--n-400);
+  --code-punctuation: var(--n-300);
+}
+
+/* ============ LAYER 3b — themes: LAYER 1 hue rotations only ============ */
+[data-theme="slate"] {
+  --p-900: #131921; --p-800: #1C232E; --p-700: #27313F; --p-600: #334052; --p-500: #43536A;
+  --p-400: #63748D; --p-300: #9AA6B6; --p-200: #CCD2DA; --p-100: #EBEEF1; --p-050: #F6F7F8;
+  --n-900: #14171B; --n-800: #22262B; --n-700: #33383E; --n-600: #494E56; --n-500: #636971;
+  --n-400: #848A92; --n-300: #B0B5BD; --n-200: #D2D6DB; --n-100: #E7E9EC; --n-075: #F3F4F5;
+  --n-050: #F9F9FA; --n-0: #FFFFFF;
+}
+
+[data-theme="indigo"] {
+  --p-900: #09062E; --p-800: #0E0A40; --p-700: #161056; --p-600: #1D166F; --p-500: #271E8F;
+  --p-400: #453BB5; --p-300: #867FD1; --p-200: #C2BFE7; --p-100: #E7E6F6; --p-050: #F4F3FB;
+  --n-900: #100F20; --n-800: #1E1C31; --n-700: #2E2C45; --n-600: #43415E; --n-500: #5D5A7A;
+  --n-400: #7E7C9A; --n-300: #ABA9C4; --n-200: #CFCDE0; --n-100: #E5E4EF; --n-075: #F1F1F7;
+  --n-050: #F8F8FB; --n-0: #FFFFFF;
+}
+
+[data-theme="teal"] {
+  --p-900: #062B2E; --p-800: #0A3C40; --p-700: #105156; --p-600: #16696F; --p-500: #1E878F;
+  --p-400: #3BADB5; --p-300: #7FCCD1; --p-200: #BFE4E7; --p-100: #E6F5F6; --p-050: #F3FAFB;
+  --n-900: #0F1F20; --n-800: #1C3031; --n-700: #2C4345; --n-600: #415C5E; --n-500: #5A787A;
+  --n-400: #7C989A; --n-300: #A9C2C4; --n-200: #CDDFE0; --n-100: #E4EEEF; --n-075: #F1F7F7;
+  --n-050: #F8FBFB; --n-0: #FFFFFF;
+}

@@ -1,0 +1,14 @@
+/* 140ms control state, 200ms surfaces, 320ms overlays. One easing curve. */
+:root{
+  --dur-control:140ms;--dur-surface:200ms;--dur-overlay:320ms;
+  --ease-standard:cubic-bezier(0.2,0.6,0.2,1);
+  --travel-overlay:10px;
+  --travel-panel:14px;
+  --t-control:var(--dur-control) var(--ease-standard);
+  --t-surface:var(--dur-surface) var(--ease-standard);
+  --t-overlay:var(--dur-overlay) var(--ease-standard);
+}
+@media (prefers-reduced-motion: reduce){
+  :root{--dur-control:0ms;--dur-surface:0ms;--dur-overlay:0ms;--travel-overlay:0px;--travel-panel:0px}
+  *,*::before,*::after{animation-duration:0.001ms !important;animation-iteration-count:1 !important;transition-duration:0.001ms !important}
+}

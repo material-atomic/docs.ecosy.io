@@ -1,0 +1,15 @@
+/* Element defaults. Backgrounds are flat colour only. */
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--background);color:var(--foreground);font-family:var(--font-sans);font-size:var(--text-body);line-height:var(--lh-body);-webkit-font-smoothing:antialiased;text-wrap:pretty}
+h1,h2,h3,h4{margin:0;font-weight:var(--fw-bold);letter-spacing:var(--ls-heading);color:var(--foreground)}
+h1{font-size:var(--text-h1);line-height:var(--lh-h1)}
+h2{font-size:var(--text-h2);line-height:var(--lh-h2)}
+h3{font-size:var(--text-h3);line-height:var(--lh-h3)}
+h4{font-size:var(--text-h4);line-height:var(--lh-h4)}
+p{margin:0 0 var(--space-16);max-width:var(--measure-body)}
+code,kbd,samp,pre{font-family:var(--font-mono);font-size:var(--text-mono)}
+a{color:var(--primary);text-decoration:underline;text-underline-offset:2px;text-decoration-thickness:1px;transition:color var(--t-control)}
+a:hover{color:var(--brand)}
+a:focus-visible{outline:var(--focus-ring-width) solid var(--ring);outline-offset:var(--focus-ring-offset);border-radius:var(--radius-sm)}
+::selection{background:var(--p-100);color:var(--p-900)}
+::placeholder{color:var(--muted-foreground);opacity:1}
