@@ -31,7 +31,7 @@ export const GET = Route({ users: UserRepository }).get(async (ctx) => {
 | | |
 |---|---|
 | [`Route`](/next/route) | route handlers with injected dependencies |
-| [`Bootstrap`, `Instrument`](/next/bootstrap) | ordered startup, wired into `instrumentation.ts` |
+| [`Bootstrap`](/next/bootstrap) | ordered startup, called from `instrumentation.ts` |
 | [`Inject`](/next/inject) | the injection primitive, on its own subpath |
 | [`Jwt`](/next/jwt) | bearer-token extraction, verification and signing |
 | [`Proxy`](#proxy) | middleware over every matched request |
