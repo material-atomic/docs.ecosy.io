@@ -17,7 +17,7 @@ yarn add @ecosy/orm pg
 and by nothing else, so an app on another engine never installs it.
 
 ```ts
-import { DataSource, Entity } from "@ecosy/orm";
+import { DataSource, Entity, createRepository } from "@ecosy/orm";
 import { PgDriver } from "@ecosy/orm/drivers/pg";
 
 const User = Entity.create("users", {
@@ -35,7 +35,7 @@ await DataSource
   .entities([User])
   .initialize();
 
-const users = new DataSource().createRepository(User);
+const users = createRepository(User);
 const user = await users.findOne({ where: { email: "a@b.com" } });
 ```
 
@@ -147,13 +147,30 @@ Passing the driver to `initialize` is shorthand for calling `driver()` first.
 const db = new DataSource();
 
 await db.query("select 1", []);
-const users = db.createRepository(User);
 ```
 
 ```ts
 query<Row>(sql: string, params?: unknown[]): Promise<QueryResultLike<Row>>
-createRepository<T>(EntityClass: EntityConstructor<T>): Repository<T>
+transaction(fn?): Promise<Transaction | T>
 ```
+
+### `createRepository`
+
+```ts
+import { createRepository } from "@ecosy/orm";
+
+const users = createRepository(User);
+```
+
+A repository for an entity with no class of its own — the same thing
+`class UserRepository extends Repository<User>` gives you, without the class.
+
+It was `DataSource#createRepository` until **1.1.1**. It was the only reason
+`DataSource` needed `Repository` as a value, while `Repository` needs
+`DataSource` for every query it runs, so the pair imported each other — and a
+cycle in a package whose entry re-exports both is a class that is `undefined`
+at the moment the other is evaluated. Moving one function out was the whole
+fix.
 
 `new DataSource()` does **not** connect — it runs on whatever driver is
 installed. Calling `query` before one is throws:
