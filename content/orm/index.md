@@ -295,19 +295,19 @@ they are the contract, and a driver of your own only has to satisfy it.
 ```ts
 find(options: FindOptions<Entity>): Promise<Entity[]>
 findOne(options: FindOptions<Entity>): Promise<Entity | null>
-insert(data: Partial<Entity>): Promise<Entity>
-insert(data: Partial<Entity>[]): Promise<Entity[]>
-update(where: FindWhereOptions<Entity>, data: Partial<Entity>): Promise<…>
+insert(data: PartialInput<Entity>): Promise<Entity>
+insert(data: PartialInput<Entity>[]): Promise<Entity[]>
+update(where: FindWhereOptions<Entity>, data: PartialInput<Entity>): Promise<…>
 delete(where: FindWhereOptions<Entity>): Promise<…>
-upsert(data: Partial<Entity>, conflictColumns: string[]): Promise<Entity>
-upsert(data: Partial<Entity>[], conflictColumns: string[]): Promise<Entity[]>
+upsert(data: PartialInput<Entity>, conflictColumns: string[]): Promise<Entity>
+upsert(data: PartialInput<Entity>[], conflictColumns: string[]): Promise<Entity[]>
 syncSchema(): Promise<void>
 getPrimaryKeyField(): string
 ```
 
 ```ts
 interface FindOptions<Entity> {
-  where?: FindWhereOptions<Entity>;
+  where?: FindWhereOptions<Entity> | undefined;
   limit?: number;
   offset?: number;
 }
@@ -368,6 +368,27 @@ await users.find({
 An array is also an `AND` of its members. Every value goes through a
 parameter placeholder — nothing is interpolated into SQL.
 
+### `And` and `Or` read the entity from where they are used
+
+Neither takes a type argument above, and neither infers one from its
+conditions — `{ role: "editor" }` is not an entity, so there is nothing there
+to infer from. The entity comes from the position the result lands in, which
+inside `find({ where: … })` is the repository's own.
+
+That is enough almost always. It runs out when the call has no such position:
+
+```ts
+const rule = And({ role: "editor" });      // no context — falls back
+await users.find({ where: rule });         // ✗ not assignable
+
+const rule: FindWhereOptions<User> = And({ role: "editor" });
+await users.find({ where: rule });         // ✓
+```
+
+Annotate the variable, or write the call where it is used.
+
+Fixed in **1.1.1**. Before it, the nested example above did not compile at all.
+
 ## Active record
 
 An entity that came from a repository carries a hidden reference to it:
@@ -423,7 +444,7 @@ It runs on `JSON.stringify`, so it protects a response body, not a
 ## `Entity.hydrate`
 
 ```ts
-static hydrate<T extends Entity>(data: Partial<T>, repo: Repository<any>): T
+static hydrate<T extends Entity>(data: PartialInput<T>, repo: Repository<any>): T
 ```
 
 Builds an instance from raw data and attaches a repository — what `find` uses.
@@ -442,10 +463,10 @@ class QueryBuilder<Entity> {
   constructor(entityName: string, schema: SchemaOptions, dialect?: Dialect)
 
   buildSelect(options: FindOptions<Entity>): { sql: string; params: any[] }
-  buildInsert(rows: Partial<Entity>[]): { sql: string; params: any[] }
-  buildUpdate(where: FindWhereOptions<Entity>, data: Partial<Entity>): { sql: string; params: any[] }
+  buildInsert(rows: PartialInput<Entity>[]): { sql: string; params: any[] }
+  buildUpdate(where: FindWhereOptions<Entity>, data: PartialInput<Entity>): { sql: string; params: any[] }
   buildDelete(where: FindWhereOptions<Entity>): { sql: string; params: any[] }
-  buildUpsert(rows: Partial<Entity>[], conflictColumns: string[]): { sql: string; params: any[] }
+  buildUpsert(rows: PartialInput<Entity>[], conflictColumns: string[]): { sql: string; params: any[] }
 }
 ```
 
@@ -479,12 +500,46 @@ script that is not the application's own startup path.
 Schema sync creates what is missing. It does not drop or alter existing
 columns — a renamed or retyped column needs a migration you write.
 
+## `exactOptionalPropertyTypes`
+
+Every input type says `| undefined` where a value may be absent, so a project
+with the flag on can pass one:
+
+```ts
+const wrapId = isEmbed ? payload.wrapId : undefined;
+
+await projects.insert({ name, wrapId });            // ✓
+await projects.find({ where: { userId }, limit });   // ✓ limit?: number | undefined
+```
+
+`Partial<T>` is what this replaces, and not as a matter of style — under the
+flag it cannot express what these functions accept:
+
+```ts
+Partial<{ nickname: string | null }>   // { nickname?: string | null }
+```
+
+That set holds no `undefined`, so `{ nickname: undefined }` is rejected — even
+though the ORM treats a missing key and an undefined one identically, since a
+column set to `undefined` is simply not written.
+
+```ts
+type PartialInput<T> = { [K in keyof T]?: T[K] | undefined };
+```
+
+Nothing is widened beyond that, and return types are untouched: a row that came
+back is not optional in the caller's sense, and relaxing it would only move the
+same problem one step along.
+
+Since **1.1.1**.
+
 ## Types
 
 ```ts
 type InferColumnType<T extends string>
 type InferSchema<TCols extends Record<string, ColumnOptions>>
 type EntityConstructor<T extends Entity = Entity>
+type PartialInput<T>
 type FindCondition<T>
 type ObjectWhere<Entity>
 type FindWhereOptions<Entity>
