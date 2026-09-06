@@ -13,7 +13,8 @@ summary: Route handlers, dependency injection, boot ordering and typed errors fo
 yarn add @ecosy/next
 ```
 
-`next` is a peer dependency. Nothing else.
+`next` is a peer dependency. `jsonwebtoken` is an *optional* one, needed only
+by [`@ecosy/next/jwt`](/next/jwt) — nothing else in the package loads it.
 
 ```ts
 import { Route, NotFound } from "@ecosy/next";
@@ -32,6 +33,7 @@ export const GET = Route({ users: UserRepository }).get(async (ctx) => {
 | [`Route`](/next/route) | route handlers with injected dependencies |
 | [`Bootstrap`, `Instrument`](/next/bootstrap) | ordered startup, wired into `instrumentation.ts` |
 | [`Inject`](/next/inject) | the injection primitive, on its own subpath |
+| [`Jwt`](/next/jwt) | bearer-token extraction, verification and signing |
 | [`Proxy`](#proxy) | middleware over every matched request |
 | [`Handler`](#handler) | a reusable handler with its own dependencies |
 | [`Cookie`](#cookie) | cookie access with safe defaults |
@@ -39,12 +41,17 @@ export const GET = Route({ users: UserRepository }).get(async (ctx) => {
 | [`createUrl`](#createurl) | URL building |
 | [`Exception`](/next/route#exceptions) and subclasses | throw a status, get a response |
 
-Two entry points:
+Three entry points:
 
 ```ts
 import { Route, Bootstrap, Proxy } from "@ecosy/next";
 import { Inject } from "@ecosy/next/inject";
+import { Jwt } from "@ecosy/next/jwt";
 ```
+
+`Inject` and `Jwt` stay off the root on purpose: the first so the primitive is
+an explicit choice, the second so `jsonwebtoken` is never pulled into an app
+that does not use it.
 
 ## Proxy
 

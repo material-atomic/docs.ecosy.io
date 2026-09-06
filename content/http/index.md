@@ -524,6 +524,38 @@ const getUsers = api<User[]>("users.list");
 const { data } = await getUsers.fn();
 ```
 
+### Calling an action
+
+Every action takes **one options object**, whatever its method:
+
+```ts
+const api = createClient({
+  baseURL: "https://api.example.com",
+  endpoint: { users: { list: "/users", update: "/users/{id}" } },
+});
+
+const listUsers  = api<User[]>("users.list");
+const updateUser = api<User, [{ params: { id: string }, body: Partial<User> }]>(
+  "users.update",
+  Methods.PUT,
+);
+
+await listUsers.fn();
+await updateUser.fn({ params: { id: "42" }, body: { name: "Ada" } });
+```
+
+| | |
+|---|---|
+| `params` | Fills `{name}` placeholders in the endpoint path. |
+| `body` | The request body, on methods that take one. |
+| *anything else* | Passed on as request init — headers, signal, cache. |
+
+The shape is the same for `GET` and for `POST`, so a call site never has to
+know which argument slot a given method uses underneath. Before 0.1.1 it did:
+the object was handed to `post(url, body, init)` whole, which made it the body
+and left `params` unread, so every `{id}` in a mutation URL resolved to an
+empty string.
+
 ## Constants and types
 
 ```ts

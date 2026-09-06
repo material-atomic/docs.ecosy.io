@@ -29,23 +29,112 @@ everything else is those two interfaces.
 ## `Logger`
 
 ```ts
+function Logger(options?: LoggerOptions): ILoggerConstructor
 function Logger(standard?: LoggerStandard, deliveries?: ILogDelivery[]): ILoggerConstructor
+
+interface LoggerOptions {
+  standard?: LoggerStandard;
+  adapter?: LogAdapter | ILogDelivery | (LogAdapter | ILogDelivery)[];
+  service?: string;
+  level?: LogLevel;
+  enable?: boolean;
+}
 ```
 
 | | |
 |---|---|
 | `standard` | Wire format. Defaults to `"TEXT"`. |
-| `deliveries` | Where formatted output goes. Defaults to `[new ConsoleDelivery()]`. |
+| `adapter` | Where output goes. Defaults to `console`. See [Adapters](#adapters). |
+| `service` | The name this app reports itself as. See [Naming the service](#naming-the-service). |
+| `level` | Lowest severity to emit. Defaults to `"debug"`, which emits everything. |
+| `enable` | `false` silences the logger entirely. Defaults to `true`. |
 | **returns** | A class constructible with no arguments. |
+
+```ts
+const AppLogger = Logger({ adapter: console, enable: false });
+```
 
 Returns a **class**, not an instance, so it drops straight into an injector:
 
 ```ts
-Route({ logger: Logger("JSON") })
-Inject({ logger: Logger("OTLP", [new HttpDelivery(endpoint)]) })
+Route({ logger: Logger({ standard: "JSON", service: "api", level: "info" }) })
 ```
 
 An unknown `standard` silently falls back to `"TEXT"` rather than throwing.
+
+The positional form is the 1.0.0 signature and still works unchanged:
+
+```ts
+Logger("JSON", [new ConsoleDelivery()]);
+```
+
+### Adapters
+
+```ts
+interface LogAdapter {
+  log(...args: any[]): void;
+  info?(...args: any[]): void;
+  warn?(...args: any[]): void;
+  error?(...args: any[]): void;
+  debug?(...args: any[]): void;
+}
+```
+
+`adapter` takes anything console-shaped, so the global `console` goes in
+directly and so does a test double that records what it was given:
+
+```ts
+const seen: string[] = [];
+Logger({ adapter: { log: (...args) => seen.push(args.join(" ")) } });
+```
+
+Only `log` is required. A level with no matching method falls back to it, so a
+one-method object is a usable sink.
+
+An [`ILogDelivery`](#deliveries) is accepted too — it is told apart by having a
+`send` method — and an array may mix the two:
+
+```ts
+Logger({ adapter: [console, new HttpDelivery(url)] });
+```
+
+### Levels
+
+```ts
+type LogLevel = "debug" | "log" | "info" | "warn" | "error";
+```
+
+Severity runs `debug` < `log` = `info` < `warn` < `error`. `log` and `info`
+are the same height — every format here treats them as one severity, and they
+differ only in which `console` method receives them.
+
+An entry below `level` is dropped **before it is formatted**, so a `debug`
+call in a `level: "info"` logger costs a comparison and nothing else — no
+`JSON.stringify`, no delivery. The same is true of every call when
+`enabled: false`.
+
+```ts
+const logger = new (Logger({ standard: "JSON", level: "warn" }))();
+
+logger.info("not formatted, not delivered");
+logger.error("emitted");
+```
+
+### Naming the service
+
+Formats that carry an application identity — Loki's `component`, OTLP's
+`service.name`, Syslog's APP-NAME, the product field in CEF and LEEF, GELF's
+`_framework_chain`, the Fluentd tag prefix — take it from `service`.
+
+```ts
+Logger({ standard: "Loki", service: "sniprender" });
+// {"streams":[{"stream":{...,"component":"sniprender"}, …
+```
+
+Leave it out and each format keeps the value it emitted in 1.0.0
+(`core-image`, `core-app`, `LoggerChain`, `logger-core`, `app.chain`). Those
+are placeholders rather than anything meaningful, so set `service` for any
+destination that groups by it.
 
 ## `ILogger`
 
@@ -122,7 +211,7 @@ render as if you had called `console.log` directly.
 ```ts
 import { ConsoleDelivery } from "@ecosy/logger";
 
-Logger("JSON", [new ConsoleDelivery(), new HttpDelivery(url)]);
+Logger({ standard: "JSON", deliveries: [new ConsoleDelivery(), new HttpDelivery(url)] });
 ```
 
 Deliveries run in order, and each is isolated: one that **throws**, or whose

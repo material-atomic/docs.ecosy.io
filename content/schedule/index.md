@@ -57,7 +57,7 @@ passed to the source and to handlers.
 | `.hook(Hook)` | — | Where outcomes go. |
 | `.retry(n)` | `0` | Extra attempts after a failure. |
 | `.timeout(ms)` | `30000` | Per-run deadline. |
-| `.sync(ms)` | `60000` | How often the source is re-read. |
+| `.sync(every)` | `60000` | Whether, and how often, the source is re-read and reconciled. `false` reads once at start and never again; `true` uses the default; a number sets the interval. |
 | `.tick(ms)` | `1000` | How often due tasks are checked. |
 | `.cascade(policy)` | `"drain"` | What happens when a task leaves the source. |
 | `.onError(fn)` | — | Called on each failed attempt, before the retry decision. |
@@ -101,18 +101,29 @@ shutdown — the interval timers keep a Node process alive.
 sync(): Promise<void>
 ```
 
-Re-reads the source and reconciles. Runs automatically every `syncMs`; call it
-directly after editing a task to apply the change without waiting.
+Re-reads the source and reconciles it against the tasks already running: an
+entry that is new becomes a task, one that changed is updated, one that has
+disappeared is handled by [`cascade`](#cascade).
 
-Two cases are deliberately **not** treated as deletions:
+Runs once inside `start()`, then on the interval `.sync()` set — unless that was
+`false`, in which case the one read at start is the only one. Call it directly
+to apply a change without waiting.
+
+A failed read is not a reason to stop: `start()` completes either way, so a
+source that is not reachable yet — an HTTP endpoint served by the same process,
+for instance — simply loads its tasks one sync later.
+
+Three cases are deliberately **not** treated as deletions:
 
 - **The source throws.** The schedule is left exactly as it was. A database
   blip is not an instruction to cancel everything.
+- **The source answers with something that is not a list.** A broken source, not
+  an empty schedule — reported the same way a failed read is.
 - **The source returns nothing while tasks are live.** Far more likely a
   partial read than a deliberate deletion of every job at once — and getting
   that wrong wipes the schedule during an incident.
 
-Both are reported through `onError` under the key `@schedule`. An entry that
+All three are reported through `onError` under the key `@schedule`. An entry that
 fails to parse is skipped and reported; the rest of the sync continues.
 
 ### `status`

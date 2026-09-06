@@ -4,7 +4,7 @@ type: module
 status: stable
 repo: material-atomic/ecosy-orm
 npm: "@ecosy/orm"
-summary: A small PostgreSQL ORM — schema-inferred entities, repositories, and active-record instances.
+summary: A small SQL ORM — schema-inferred entities, repositories, transactions, and a driver you inject.
 ---
 
 # @ecosy/orm
@@ -13,8 +13,12 @@ summary: A small PostgreSQL ORM — schema-inferred entities, repositories, and 
 yarn add @ecosy/orm pg
 ```
 
+`pg` is an **optional** peer dependency: it is needed by the Postgres driver
+and by nothing else, so an app on another engine never installs it.
+
 ```ts
 import { DataSource, Entity } from "@ecosy/orm";
+import { PgDriver } from "@ecosy/orm/drivers/pg";
 
 const User = Entity.create("users", {
   columns: {
@@ -26,14 +30,18 @@ const User = Entity.create("users", {
   indexes: [{ name: "users_email_idx", columns: ["email"], unique: true }],
 });
 
-await DataSource.entities([User]).initialize({ connectionString: process.env.DATABASE_URL });
+await DataSource
+  .driver(PgDriver({ connectionString: process.env.DATABASE_URL }))
+  .entities([User])
+  .initialize();
 
 const users = new DataSource().createRepository(User);
 const user = await users.findOne({ where: { email: "a@b.com" } });
 ```
 
-`pg` is a peer dependency — the driver belongs to the application, which
-already decides pool size, TLS and connection lifetime.
+The driver carries the connection settings, so `DataSource` itself knows
+nothing about hosts or passwords — changing engine is changing that one
+argument.
 
 Server-only: the module imports `server-only`, so importing it from a client
 component is a build error.
@@ -87,28 +95,51 @@ package does not convert.
 
 ## `DataSource`
 
+### `driver`
+
+```ts
+static driver(driver: Driver): typeof DataSource
+static get current(): Driver
+static get dialect(): Dialect
+```
+
+Installs the engine. Everything else reads it from here.
+
+```ts
+import { PgDriver } from "@ecosy/orm/drivers/pg";
+
+DataSource.driver(PgDriver({ host, user, password, database }));
+```
+
+The driver is held on `globalThis` under a `Symbol.for` key rather than in a
+module variable. A bundler gives different layers of an application their own
+copy of a module — in Next, instrumentation and a route handler are separate
+graphs — so a driver registered at startup would otherwise be invisible to the
+code that serves requests, and every query would report that none was
+installed. The same key survives a hot reload.
+
 ### `initialize`
 
 ```ts
 static entities(entities: EntityConstructor[]): typeof DataSource
-static initialize(configs: PoolConfig): Promise<DataSource>
+static initialize(driver?: Driver): Promise<DataSource>
+static end(): Promise<void>
 ```
 
 ```ts
 await DataSource
+  .driver(PgDriver(config))
   .entities([User, Post, Session])
-  .initialize({ connectionString: process.env.DATABASE_URL });
+  .initialize();
 ```
 
-`initialize` creates the pool and **synchronises every registered entity's
-schema** — creating tables and indexes that do not exist. A sync that fails
-rejects, so startup stops rather than continuing against a wrong schema.
+`initialize` opens the connection and **synchronises every registered entity's
+schema** — creating tables and indexes that do not exist, adding columns that
+were added, and adjusting nullability. A sync that fails rejects, so startup
+stops rather than continuing against a wrong schema.
 
-The pool is stored on `globalThis` under `__ECOSY_ORM_POOL`, so a second
-`initialize` reuses the existing one rather than opening another. That is what
-keeps a Next.js hot reload from leaking pools.
-
-`configs` is `pg`'s own `PoolConfig`.
+Passing the driver to `initialize` is shorthand for calling `driver()` first.
+`end()` closes the pool.
 
 ### Using it
 
@@ -117,38 +148,147 @@ const db = new DataSource();
 
 await db.query("select 1", []);
 const users = db.createRepository(User);
-const client = await db.client;      // a pooled client — release it yourself
 ```
 
 ```ts
-static get pool(): Pool
-query(sql: string, params?: unknown[]): Promise<QueryResult>
+query<Row>(sql: string, params?: unknown[]): Promise<QueryResultLike<Row>>
 createRepository<T>(EntityClass: EntityConstructor<T>): Repository<T>
-get client(): Promise<PoolClient>
 ```
 
-`new DataSource()` with no arguments does **not** connect — it attaches to the
-pool `initialize` created. Calling `query` before that throws:
+`new DataSource()` does **not** connect — it runs on whatever driver is
+installed. Calling `query` before one is throws:
 
 ```
-DataSource has not been initialized. Please call DataSource.initialize() first.
+No driver installed. Call DataSource.driver(PgDriver({ … })) before initialize().
 ```
 
-Use `client` for a transaction, and release it when done:
+## Transactions
 
 ```ts
-const client = await db.client;
+static transaction(): Promise<Transaction>
+static transaction<T>(fn: (tx: Transaction) => Promise<T>): Promise<T>
+```
+
+Given a function, the transaction commits when it returns and rolls back if it
+throws. This is the form to reach for: it cannot leak a connection.
+
+```ts
+await DataSource.transaction(async (tx) => {
+  await files.using(tx).delete({ projectId });
+  await projects.using(tx).delete({ id: projectId });
+});
+```
+
+Given nothing, the caller owns the lifecycle:
+
+```ts
+const tx = await DataSource.transaction();
+
 try {
-  await client.query("BEGIN");
-  // …
-  await client.query("COMMIT");
-} catch (e) {
-  await client.query("ROLLBACK");
-  throw e;
-} finally {
-  client.release();
+  await users.using(tx).insert({ email });
+  await tx.commit();
+} catch (error) {
+  await tx.rollback();
+  throw error;
 }
 ```
+
+### `Transaction`
+
+```ts
+class Transaction {
+  get isOpen(): boolean;
+  query<Row>(sql: string, params?: unknown[]): Promise<QueryResultLike<Row>>;
+  commit(): Promise<void>;
+  rollback(): Promise<void>;
+  release(): Promise<void>;
+}
+```
+
+| | |
+|---|---|
+| `commit` | Commits, then returns the connection to the pool. Throws if the transaction is already finished. |
+| `rollback` | Rolls back and releases. A **no-op** on a finished transaction, so it is safe in a `catch` that may follow a commit. |
+| `release` | Returns the connection. **Rolls back first if the transaction is still open.** |
+| `query` | Throws once the transaction is finished, rather than silently running outside it. |
+
+`release` rolling back is not a convenience. node-postgres does not undo a
+transaction on release, so a forgotten commit would hand the next borrower a
+connection with a transaction open on it — and their first statement would
+join it. A failed `COMMIT` rolls back for the same reason.
+
+### `Repository.using`
+
+```ts
+using(tx: Queryable): this
+```
+
+The same repository, bound to a transaction.
+
+It returns a **view**, not a mutation: the original keeps running on the pool,
+so a repository shared across requests cannot be dragged into one request's
+transaction.
+
+```ts
+await DataSource.transaction(async (tx) => {
+  await files.using(tx).moveFolder(projectId, "js", "scripts");
+  await projects.using(tx).updateSizeDelta(projectId, -bytes);
+});
+```
+
+## Drivers
+
+```ts
+interface Driver {
+  readonly name: string;
+  readonly dialect: Dialect;
+  connect(): Promise<void>;
+  end(): Promise<void>;
+  query<Row>(sql: string, params?: unknown[]): Promise<QueryResultLike<Row>>;
+  acquire(): Promise<DriverConnection>;
+}
+```
+
+A driver owns the connection. A `Dialect` owns everything that is not plain
+SQL:
+
+```ts
+interface Dialect {
+  placeholder(index: number): string;
+  quote(identifier: string): string;
+  readonly supportsReturning: boolean;
+  upsertClause(conflictColumns: string[], updateColumns: string[]): string;
+  alterNullable(table: string, column: string, type: string, notNull: boolean): string;
+  tableExists(db: Queryable, table: string): Promise<boolean>;
+  listColumns(db: Queryable, table: string): Promise<ColumnInfo[]>;
+  listIndexes(db: Queryable, table: string): Promise<Record<string, string>>;
+  listChecks(db: Queryable, table: string): Promise<Record<string, string>>;
+}
+```
+
+The split matters: no engine-specific statement lives in the query builders any
+more, which is what makes a second engine a new file rather than a rewrite.
+`$1` versus `?`, `"name"` versus `` `name` ``, `ON CONFLICT` versus `ON
+DUPLICATE KEY UPDATE`, `information_schema` versus `pg_indexes` — all of it is
+the dialect's.
+
+### Built-in drivers
+
+```ts
+import { PgDriver } from "@ecosy/orm/drivers/pg";
+
+PgDriver(config: PoolConfig): Driver
+```
+
+Each one lives on its own subpath and loads its client package through a
+**dynamic import**, so it is deliberately **not exported from the package
+root** — installing `@ecosy/orm` pulls in no database client at all. The pool
+is held on `globalThis`, so a hot reload reuses it instead of opening a second.
+
+`config` is `pg`'s own `PoolConfig`.
+
+Only `Driver`, `Dialect` and the surrounding types are exported from the root;
+they are the contract, and a driver of your own only has to satisfy it.
 
 ## Repository
 
@@ -299,7 +439,7 @@ const entities = rows.map((row) => User.hydrate(row, users));
 
 ```ts
 class QueryBuilder<Entity> {
-  constructor(entityName: string, schema: SchemaOptions)
+  constructor(entityName: string, schema: SchemaOptions, dialect?: Dialect)
 
   buildSelect(options: FindOptions<Entity>): { sql: string; params: any[] }
   buildInsert(rows: Partial<Entity>[]): { sql: string; params: any[] }
@@ -318,7 +458,13 @@ qb.buildSelect({ where: { active: true }, limit: 10 });
 // { sql: 'SELECT * FROM "users" WHERE "active" = $1 LIMIT 10', params: [true] }
 ```
 
-`SchemaBuilder` is the counterpart that emits DDL and runs `syncSchema`.
+`dialect` defaults to the installed driver's, so it is only worth passing to
+compile a statement for an engine other than the one in use. The SQL above is
+Postgres because `PgDriver` is what produced it — on another dialect the same
+call yields `?` placeholders and backtick-quoted identifiers.
+
+`SchemaBuilder(connection, dialect?)` is the counterpart that emits DDL and
+runs `syncSchema`.
 
 ## Migration helpers
 
