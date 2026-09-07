@@ -39,12 +39,21 @@ client-side render the theme was never applied and the page flashed.
 That hook fires synchronously before the browser paints the mutation, which is
 what keeps the flash away — a `useEffect` would run a frame too late.
 
-**2. The server still emits the script tag.**
+**2. The script tag is still rendered, on both sides.**
 
-Unchanged on that side, deliberately. The tag in the initial HTML is what
-prevents a flash before hydration, and no effect can run early enough to
-replace it. `ThemeScript` renders the tag on the server and `null` on the
-client.
+The tag in the initial HTML is what prevents a flash before hydration, and no
+effect can run early enough to replace it, so the server keeps emitting it.
+
+It is rendered on the client too — not because the client needs it to run, but
+because hydration needs the two trees to match. Returning it on the server and
+`null` on the client raised *Hydration failed because the server rendered HTML
+didn't match the client* and re-rendered the subtree, which is the flash this
+component exists to prevent. `suppressHydrationWarning` does not help:
+it forgives an element's attributes, not its absence.
+
+On a client render React inserts the tag through the DOM, where it does not
+execute — that is what change 1 is for. Fixed in **0.4.7**; 0.4.6 has the
+mismatch.
 
 **3. A theme missing from `value` no longer leaks its internal name.**
 
@@ -80,13 +89,12 @@ Same API, different package name — so the import specifier changes:
 
 Or alias `next-themes` to it in your bundler and leave every import alone.
 
-### Both are 0.4.6, and they are not the same code
+### The version numbers ran together at 0.4.6
 
-The fork keeps upstream's version number so the lineage stays readable, which
-means `next-themes@0.4.6` and `@ecosy/next-themes@0.4.6` are different builds
-under the same number. If a lockfile or a colleague reports "0.4.6", the
-version alone does not tell you which one is installed — check the package
-name.
+The fork started at upstream's version so the lineage stayed readable, which
+made `next-themes@0.4.6` and `@ecosy/next-themes@0.4.6` two different builds
+under one number. From **0.4.7** the fork moves on its own; upstream is still
+at 0.4.6.
 
 ## When to go back
 
