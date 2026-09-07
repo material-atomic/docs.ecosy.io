@@ -241,6 +241,23 @@ function UserRow({ item, index, dense }: { item: User; index: number; dense?: bo
 cast on the way in, so a component that forgets to declare `index` still
 compiles and still receives it.
 
+### Forwarded props are checked
+
+```ts
+type ListingProps<Data, ItemProps> =
+  ListingOwnProps<Data, ItemProps> & Omit<ItemProps, "item" | "index">;
+```
+
+Anything beyond `Listing`'s own props has to be a prop `Item` takes, with the
+type it declares. A prop `Item` *requires* is required here too — nothing else
+supplies it, so leaving it out would hand every row `undefined`.
+
+`item` and `index` are excluded: they come from the data, one per row.
+
+Until **0.4.2** this was an index signature, and a misspelled `Itme={Row}`, a
+`dense="yes"` where a boolean was wanted, and a prop the item does not take all
+type-checked.
+
 ### `Container` receives only `children`
 
 Extra props go to the items, never to the container. A container that needs its
