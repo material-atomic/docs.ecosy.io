@@ -129,7 +129,7 @@ at module scope rather than inside a component.
 
 ```ts
 function createStoreOrder<State, Store extends Subscriber<State>>(store: Store):
-  <Ordered>(selector: (state: State) => Ordered) => Ordered
+  StoreSelector<State>   // <Ordered>(selector: (state: State) => Ordered) => Ordered
 ```
 
 Builds a `useSelector`-style hook for any

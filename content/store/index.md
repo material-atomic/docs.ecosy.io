@@ -25,11 +25,11 @@ const counter = createSlice({
   },
 });
 
-const { store, dispatch, getState } = configureStore({
+const { store, getState, actions } = configureStore({
   slices: combineSlices({ counter }),
 });
 
-dispatch(counter.actions.add(5));
+actions.counter.add(5);
 getState().counter.count;   // 5
 ```
 
@@ -121,6 +121,10 @@ The root reducer delegates each action to the owning slice and returns the
 **same object** when nothing changed, so an unrelated dispatch does not
 invalidate every subscriber.
 
+The result also carries `slices`, the map as given, which is what
+`configureStore` binds its `actions` from. Added in **0.3.0** — a
+`CombineSlicesResult` built by hand needs it.
+
 ## `configureStore`
 
 ```ts
@@ -140,14 +144,31 @@ interface ConfigureStoreResult<Slices> {
   dispatch: (action: CombinedActions<Slices>) => void;
   getState: () => CombinedState<Slices>;
   hydrate: (state: PartialLiteral<CombinedState<Slices>>) => void;
+  actions: StoreActions<Slices>;
 }
 ```
 
 Framework-agnostic — safe on a server, in a Worker, in any runtime.
 
+### `actions`
+
+Each slice's action creators, bound to this store's dispatch and keyed by the
+name given to `combineSlices`:
+
+```ts
+actions.counter.add(5);
+// same as dispatch(counter.actions.add(5))
+```
+
+Arguments are the creator's; the return is `void`. The key is the one from
+`combineSlices`, which is often not the slice's own `name`.
+
+Since **0.3.0**.
+
 ### `dispatch`
 
-Runs the root reducer, writes the state, and fires the action's channel.
+Runs the root reducer, writes the state, and fires the action's channel. Still
+there for an action assembled elsewhere, or one dispatched conditionally.
 
 ### `getState`
 
@@ -252,4 +273,26 @@ type CombinedState<Slices>;
 type CombinedActions<Slices>;
 type CombinedEvents<Slices>;
 type WiredStore<Slices>;
+type BoundActions<Actions>;
+type StoreActions<Slices>;
+type StoreSelector<State> = <Ordered>(selector: (state: State) => Ordered) => Ordered;
 ```
+
+### `StoreSelector`
+
+The shape of a selector hook over a store's state. `Ordered` is whatever the
+selector picks out — the type on the left of the assignment:
+
+```ts
+import { createStoreOrder } from "@ecosy/react";
+import type { StoreSelector } from "@ecosy/store";
+
+export type RootState = ReturnType<typeof configured.getState>;
+
+export const useSelector: StoreSelector<RootState> = createStoreOrder(store);
+```
+
+It lives here rather than in `@ecosy/react` because it describes a store. The
+hook that satisfies it is React's; another binding satisfies the same shape.
+
+Since **0.3.0**.
