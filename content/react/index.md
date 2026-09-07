@@ -209,7 +209,7 @@ component having to decide what "no results" looks like every time.
 | `empty` | Rendered *instead of* the container when there is nothing. Defaults to `null`. |
 | `itemKey` | The property that identifies a row. |
 | `keyExtractor` | Derives a row's key. Wins over `itemKey`. |
-| *anything else* | Forwarded to every `Item`. |
+| *anything else* | Any prop `Item` takes, forwarded to every one. |
 
 ```tsx
 <Listing
@@ -245,14 +245,19 @@ compiles and still receives it.
 
 ```ts
 type ListingProps<Data, ItemProps> =
-  ListingOwnProps<Data, ItemProps> & Omit<ItemProps, "item" | "index">;
+  ListingOwnProps<Data, ItemProps> & Partial<Omit<ItemProps, "item" | "index">>;
 ```
 
 Anything beyond `Listing`'s own props has to be a prop `Item` takes, with the
-type it declares. A prop `Item` *requires* is required here too — nothing else
-supplies it, so leaving it out would hand every row `undefined`.
+type it declares.
 
-`item` and `index` are excluded: they come from the data, one per row.
+Passing them is optional — `Listing` forwards what it is given and does not
+undertake to satisfy `Item`'s contract — but the *types* are not optional:
+`dense="yes"` where a boolean is wanted is an error either way.
+
+`item` and `index` are excluded. They come from the data, one value per row, so
+a caller cannot meaningfully pass them; leaving them in would have an editor
+offer `item` as a prop of `<Listing>`.
 
 Until **0.4.2** this was an index signature, and a misspelled `Itme={Row}`, a
 `dense="yes"` where a boolean was wanted, and a prop the item does not take all
@@ -288,11 +293,12 @@ position rather than the data.
 a composite key, a derived one, and a list of primitives, which has no property
 to name.
 
-If both are given, `keyExtractor` is used and a warning says so in development.
+If both are given, `keyExtractor` is used and a warning says so.
 
 Position stays the default. A property that resolves to something other than a
 string or a number — missing on one row, an object, a `Date` — falls back to
-position for that row and warns.
+position for that row and warns once per render, however many rows are
+affected.
 
 Since **0.4.2**.
 
