@@ -418,7 +418,7 @@ await users.find({ where: { name: undefined } });
 ```
 
 `undefined` is what a filter built from optional input looks like, so a field
-that is absent simply drops out:
+that is absent drops out:
 
 ```ts
 await users.find({ where: { role, team } });   // no condition on team

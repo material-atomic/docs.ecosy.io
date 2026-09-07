@@ -111,7 +111,7 @@ to apply a change without waiting.
 
 A failed read is not a reason to stop: `start()` completes either way, so a
 source that is not reachable yet — an HTTP endpoint served by the same process,
-for instance — simply loads its tasks one sync later.
+for instance — loads its tasks one sync later.
 
 Three cases are deliberately **not** treated as deletions:
 
@@ -258,7 +258,7 @@ What a handler returns lands in `event.raw`.
 
 An entry naming a key with no handler fires `notFound` and fails the run —
 loud rather than silent, since a row that is enabled but points nowhere
-otherwise looks like a task that simply never fires.
+otherwise looks like a task that never fires.
 
 ## Retries and timeouts
 

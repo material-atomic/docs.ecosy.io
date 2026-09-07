@@ -205,8 +205,8 @@ interface ILogDelivery {
 ```
 
 `ConsoleDelivery` is the only one that ships. It calls the `console` method
-matching the level, and spreads an array payload — which is what makes `TEXT`
-render as if you had called `console.log` directly.
+matching the level and spreads an array payload, so `TEXT` renders as if you
+had called `console.log` directly.
 
 ```ts
 import { ConsoleDelivery } from "@ecosy/logger";
