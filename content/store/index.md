@@ -275,24 +275,4 @@ type CombinedEvents<Slices>;
 type WiredStore<Slices>;
 type BoundActions<Actions>;
 type StoreActions<Slices>;
-type StoreSelector<State> = <Ordered>(selector: (state: State) => Ordered) => Ordered;
 ```
-
-### `StoreSelector`
-
-The shape of a selector hook over a store's state. `Ordered` is whatever the
-selector picks out — the type on the left of the assignment:
-
-```ts
-import { createStoreOrder } from "@ecosy/react";
-import type { StoreSelector } from "@ecosy/store";
-
-export type RootState = ReturnType<typeof configured.getState>;
-
-export const useSelector: StoreSelector<RootState> = createStoreOrder(store);
-```
-
-It lives here rather than in `@ecosy/react` because it describes a store. The
-hook that satisfies it is React's; another binding satisfies the same shape.
-
-Since **0.3.0**.

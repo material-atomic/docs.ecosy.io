@@ -129,7 +129,9 @@ at module scope rather than inside a component.
 
 ```ts
 function createStoreOrder<State, Store extends Subscriber<State>>(store: Store):
-  StoreSelector<State>   // <Ordered>(selector: (state: State) => Ordered) => Ordered
+  StoreSelector<State>
+
+type StoreSelector<State> = <Ordered>(selector: (state: State) => Ordered) => Ordered
 ```
 
 Builds a `useSelector`-style hook for any
@@ -149,6 +151,23 @@ function Metrics() {
 
 Comparison uses the subscriber's own `shallow.isEqual`, so a store configured
 with a different equality function is honoured here too.
+
+`StoreSelector<State>` is the hook's own type, for annotating the export:
+
+```ts
+import { createStoreOrder, type StoreSelector } from "@ecosy/react";
+import { combineSlices, configureStore } from "@ecosy/store";
+
+const configured = configureStore({ slices: combineSlices({ auth, project }) });
+
+export type RootState = ReturnType<typeof configured.getState>;
+export const useSelector: StoreSelector<RootState> = createStoreOrder(configured.store);
+```
+
+`Ordered` is whatever the selector picks out — the type on the left of the
+assignment at the call site.
+
+Since **0.5.0**.
 
 ## Server rendering
 
