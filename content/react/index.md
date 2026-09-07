@@ -207,6 +207,8 @@ component having to decide what "no results" looks like every time.
 | `Item` | Component rendered once per entry. |
 | `Container` | Wraps the items. Defaults to `Fragment`. |
 | `empty` | Rendered *instead of* the container when there is nothing. Defaults to `null`. |
+| `itemKey` | The property that identifies a row. |
+| `keyExtractor` | Derives a row's key. Wins over `itemKey`. |
 | *anything else* | Forwarded to every `Item`. |
 
 ```tsx
@@ -248,13 +250,34 @@ own props has to close over them:
 <Listing items={rows} Item={Row} Container={({ children }) => <Table striped>{children}</Table>} />
 ```
 
-### `key` is the array index
+### `itemKey` and `keyExtractor`
 
-Items are keyed by position, so inserting, removing or reordering makes React
-reuse the wrong element and any state inside a row — an open menu, a focused
-input, a CSS transition — follows the position rather than the data. For a
-static or append-only list that is fine; for a list that reorders, render the
-`map` yourself with a stable key.
+```tsx
+<Listing items={users} Item={UserRow} itemKey="id" />
+<Listing items={users} Item={UserRow} keyExtractor={(user, index) => `${user.id}:${index}`} />
+```
+
+Give one to any list that can reorder. Without either, rows are keyed by
+position, and inserting, removing or sorting then makes React reuse the wrong
+element — an open menu, a focused input, a running transition follow the
+position rather than the data.
+
+| | |
+|---|---|
+| `itemKey` | A property name, checked against the item type. |
+| `keyExtractor` | `(item, index) => Key`, the same name and signature as React Native's. |
+
+`itemKey` is the shorthand for the common case. `keyExtractor` covers the rest:
+a composite key, a derived one, and a list of primitives, which has no property
+to name.
+
+If both are given, `keyExtractor` is used and a warning says so in development.
+
+Position stays the default. A property that resolves to something other than a
+string or a number — missing on one row, an object, a `Date` — falls back to
+position for that row and warns.
+
+Since **0.5.0**.
 
 ## `createSvgIcon`
 
