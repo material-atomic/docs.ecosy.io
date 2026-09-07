@@ -167,7 +167,7 @@ export const useSelector: StoreSelector<RootState> = createStoreOrder(configured
 `Ordered` is whatever the selector picks out — the type on the left of the
 assignment at the call site.
 
-Since **0.5.0**.
+Since **0.4.2**.
 
 ## Server rendering
 
@@ -277,7 +277,7 @@ Position stays the default. A property that resolves to something other than a
 string or a number — missing on one row, an object, a `Date` — falls back to
 position for that row and warns.
 
-Since **0.5.0**.
+Since **0.4.2**.
 
 ## `createSvgIcon`
 

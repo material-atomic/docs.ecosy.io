@@ -122,7 +122,7 @@ The root reducer delegates each action to the owning slice and returns the
 invalidate every subscriber.
 
 The result also carries `slices`, the map as given, which is what
-`configureStore` binds its `actions` from. Added in **0.3.0** — a
+`configureStore` binds its `actions` from. Added in **0.2.2** — a
 `CombineSlicesResult` built by hand needs it.
 
 ## `configureStore`
@@ -163,7 +163,7 @@ actions.counter.add(5);
 Arguments are the creator's; the return is `void`. The key is the one from
 `combineSlices`, which is often not the slice's own `name`.
 
-Since **0.3.0**.
+Since **0.2.2**.
 
 ### `dispatch`
 
