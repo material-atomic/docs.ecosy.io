@@ -16,6 +16,10 @@ yarn add @ecosy/orm pg
 `pg` is an **optional** peer dependency: it is needed by the Postgres driver
 and by nothing else, so an app on another engine never installs it.
 
+There are no other dependencies. Since **1.1.2** there is no `server-only`
+either, so the package runs wherever Node does — a script, a worker, a test
+runner — and not only inside Next.
+
 ```ts
 import { DataSource, Entity, createRepository } from "@ecosy/orm";
 import { PgDriver } from "@ecosy/orm/drivers/pg";
@@ -43,8 +47,11 @@ The driver carries the connection settings, so `DataSource` itself knows
 nothing about hosts or passwords — changing engine is changing that one
 argument.
 
-Server-only: the module imports `server-only`, so importing it from a client
-component is a build error.
+It no longer imports `server-only`. That marker made importing the ORM into a
+client component a build error, and it also made the package unusable outside
+Next: a script or a worker got `MODULE_NOT_FOUND` on a convention that means
+nothing there. Keeping a database client out of the browser is the app's own
+`import "server-only"` to write, in the module that opens the connection.
 
 ## `Entity.create`
 
@@ -325,14 +332,16 @@ getPrimaryKeyField(): string
 ```ts
 interface FindOptions<Entity> {
   where?: FindWhereOptions<Entity> | undefined;
-  limit?: number;
-  offset?: number;
+  order?: PartialInput<Record<Extract<keyof Entity, string>, OrderDirection>> | undefined;
+  limit?: number | undefined;
+  offset?: number | undefined;
 }
 ```
 
 ```ts
 const recent = await users.find({
   where: { active: true },
+  order: { createdAt: "DESC" },
   limit: 20,
   offset: 0,
 });
@@ -344,6 +353,32 @@ await users.upsert({ email: "a@x.com", name: "A" }, ["email"]);
 
 Rows come back as **hydrated entity instances**, not plain objects, so
 `save()` and `delete()` work on them.
+
+### Reach for `order` whenever `limit` is set
+
+SQL does not promise which rows a `LIMIT` returns without an `ORDER BY`.
+Postgres is free to answer with any twenty matching rows, and free to answer
+with different ones next time — so a paged list without an order silently
+repeats and skips rows as the table changes underneath it.
+
+Keys are checked against the schema, so nothing can be injected through one; a
+name that is not a column is dropped rather than written into the SQL.
+
+Since **1.1.2**.
+
+### JSON and JSONB columns are serialised for you
+
+```ts
+await settings.insert({ userId, value: { theme: "dark", tags: ["a", "b"] } });
+```
+
+`pg` turns a plain object into JSON but turns a JS array into a Postgres array
+literal `{a,b}`, which `jsonb` rejects with *invalid input syntax for type
+json*. The column type is declared, so the builder handles both shapes. Reading
+is unchanged — the driver already parses `jsonb` back into real objects and
+arrays.
+
+Since **1.1.2**.
 
 ## Conditions
 
@@ -384,6 +419,37 @@ await users.find({
 
 An array is also an `AND` of its members. Every value goes through a
 parameter placeholder — nothing is interpolated into SQL.
+
+### `null` is `IS NULL`, `undefined` is no condition at all
+
+```ts
+await users.find({ where: { deletedAt: null } });
+// … WHERE "users"."deleted_at" IS NULL
+
+await users.find({ where: { deletedAt: Not(null) } });
+// … WHERE "users"."deleted_at" IS NOT NULL
+
+await users.find({ where: { name: undefined } });
+// … no WHERE clause, no parameters
+```
+
+The two used to mean the same thing and both were wrong. A `null` became
+`= $1` with a null parameter, and `x = NULL` is UNKNOWN in SQL rather than
+false — so the query returned nothing, `update` and `delete` sharing the same
+builder did nothing, and no error was raised anywhere. The type system invited
+it: `{ deletedAt: null }` type-checks on any nullable column.
+
+`undefined` fell into the same hole, which mattered because it is what a filter
+built from optional input looks like:
+
+```ts
+await users.find({ where: { role, team } });   // team may be undefined
+```
+
+That now means "no condition on `team`", the way every other ORM reads it,
+rather than a filter the caller never asked for and cannot see.
+
+Fixed in **1.1.2**.
 
 ### `And` and `Or` read the entity from where they are used
 
@@ -507,9 +573,16 @@ runs `syncSchema`.
 ## Migration helpers
 
 ```ts
+import { syncEntities, initDatabase } from "@ecosy/orm/migration";
+
 function syncEntities(entityClasses: EntityConstructor[]): Promise<void>
 function initDatabase(): Promise<void>
 ```
+
+Its own subpath since **1.1.2**, the same arrangement as the drivers. These
+read the filesystem, so exporting them from the root put `node:fs/promises`
+and `node:path` in the import graph of everyone who imported the package —
+including someone who only wanted a type.
 
 `syncEntities` runs the same schema sync `initialize` does, for a migration
 script that is not the application's own startup path.
@@ -557,6 +630,7 @@ type InferColumnType<T extends string>
 type InferSchema<TCols extends Record<string, ColumnOptions>>
 type EntityConstructor<T extends Entity = Entity>
 type PartialInput<T>
+type OrderDirection            // "ASC" | "DESC"
 type FindCondition<T>
 type ObjectWhere<Entity>
 type FindWhereOptions<Entity>
