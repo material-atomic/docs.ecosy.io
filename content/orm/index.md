@@ -16,9 +16,8 @@ yarn add @ecosy/orm pg
 `pg` is an **optional** peer dependency: it is needed by the Postgres driver
 and by nothing else, so an app on another engine never installs it.
 
-There are no other dependencies. Since **1.1.2** there is no `server-only`
-either, so the package runs wherever Node does — a script, a worker, a test
-runner — and not only inside Next.
+There are no other dependencies, and nothing Next-specific: the package runs
+wherever Node does.
 
 ```ts
 import { DataSource, Entity, createRepository } from "@ecosy/orm";
@@ -47,11 +46,9 @@ The driver carries the connection settings, so `DataSource` itself knows
 nothing about hosts or passwords — changing engine is changing that one
 argument.
 
-It no longer imports `server-only`. That marker made importing the ORM into a
-client component a build error, and it also made the package unusable outside
-Next: a script or a worker got `MODULE_NOT_FOUND` on a convention that means
-nothing there. Keeping a database client out of the browser is the app's own
-`import "server-only"` to write, in the module that opens the connection.
+To keep the connection out of a client bundle, put `import "server-only"` at
+the top of the module that opens it. The package does not do this for you —
+it has no way to know whether it is running in a Next app.
 
 ## `Entity.create`
 
@@ -172,12 +169,7 @@ const users = createRepository(User);
 A repository for an entity with no class of its own — the same thing
 `class UserRepository extends Repository<User>` gives you, without the class.
 
-It was `DataSource#createRepository` until **1.1.1**. It was the only reason
-`DataSource` needed `Repository` as a value, while `Repository` needs
-`DataSource` for every query it runs, so the pair imported each other — and a
-cycle in a package whose entry re-exports both is a class that is `undefined`
-at the moment the other is evaluated. Moving one function out was the whole
-fix.
+It was a method on `DataSource` before **1.1.1**.
 
 `new DataSource()` does **not** connect — it runs on whatever driver is
 installed. Calling `query` before one is throws:
@@ -290,11 +282,10 @@ interface Dialect {
 }
 ```
 
-The split matters: no engine-specific statement lives in the query builders any
-more, which is what makes a second engine a new file rather than a rewrite.
-`$1` versus `?`, `"name"` versus `` `name` ``, `ON CONFLICT` versus `ON
-DUPLICATE KEY UPDATE`, `information_schema` versus `pg_indexes` — all of it is
-the dialect's.
+Everything engine-specific lives here rather than in the query builders: `$1`
+versus `?`, `"name"` versus `` `name` ``, `ON CONFLICT` versus `ON DUPLICATE
+KEY UPDATE`, `information_schema` versus `pg_indexes`. Supporting another
+engine means writing one of these.
 
 ### Built-in drivers
 
@@ -304,15 +295,14 @@ import { PgDriver } from "@ecosy/orm/drivers/pg";
 PgDriver(config: PoolConfig): Driver
 ```
 
-Each one lives on its own subpath and loads its client package through a
-**dynamic import**, so it is deliberately **not exported from the package
-root** — installing `@ecosy/orm` pulls in no database client at all. The pool
-is held on `globalThis`, so a hot reload reuses it instead of opening a second.
+Each lives on its own subpath and loads its client package through a dynamic
+import, so installing `@ecosy/orm` pulls in no database client. The pool is
+held on `globalThis`, so a hot reload reuses it instead of opening a second.
 
 `config` is `pg`'s own `PoolConfig`.
 
-Only `Driver`, `Dialect` and the surrounding types are exported from the root;
-they are the contract, and a driver of your own only has to satisfy it.
+`Driver`, `Dialect` and the surrounding types are exported from the root. A
+driver of your own has to satisfy them and nothing else.
 
 ## Repository
 
@@ -356,27 +346,21 @@ Rows come back as **hydrated entity instances**, not plain objects, so
 
 ### Reach for `order` whenever `limit` is set
 
-SQL does not promise which rows a `LIMIT` returns without an `ORDER BY`.
-Postgres is free to answer with any twenty matching rows, and free to answer
-with different ones next time — so a paged list without an order silently
-repeats and skips rows as the table changes underneath it.
+SQL does not promise which rows a `LIMIT` returns without an `ORDER BY`, so a
+paged list without one repeats and skips rows as the table changes.
 
-Keys are checked against the schema, so nothing can be injected through one; a
-name that is not a column is dropped rather than written into the SQL.
+A key that is not a column is dropped rather than written into the SQL.
 
 Since **1.1.2**.
 
-### JSON and JSONB columns are serialised for you
+### JSON and JSONB columns
+
+Pass objects and arrays as they are. No `JSON.stringify` on the way in, and
+values come back parsed.
 
 ```ts
 await settings.insert({ userId, value: { theme: "dark", tags: ["a", "b"] } });
 ```
-
-`pg` turns a plain object into JSON but turns a JS array into a Postgres array
-literal `{a,b}`, which `jsonb` rejects with *invalid input syntax for type
-json*. The column type is declared, so the builder handles both shapes. Reading
-is unchanged — the driver already parses `jsonb` back into real objects and
-arrays.
 
 Since **1.1.2**.
 
@@ -433,32 +417,22 @@ await users.find({ where: { name: undefined } });
 // … no WHERE clause, no parameters
 ```
 
-The two used to mean the same thing and both were wrong. A `null` became
-`= $1` with a null parameter, and `x = NULL` is UNKNOWN in SQL rather than
-false — so the query returned nothing, `update` and `delete` sharing the same
-builder did nothing, and no error was raised anywhere. The type system invited
-it: `{ deletedAt: null }` type-checks on any nullable column.
-
-`undefined` fell into the same hole, which mattered because it is what a filter
-built from optional input looks like:
+`undefined` is what a filter built from optional input looks like, so a field
+that is absent simply drops out:
 
 ```ts
-await users.find({ where: { role, team } });   // team may be undefined
+await users.find({ where: { role, team } });   // no condition on team
 ```
 
-That now means "no condition on `team`", the way every other ORM reads it,
-rather than a filter the caller never asked for and cannot see.
-
-Fixed in **1.1.2**.
+Before **1.1.2** both became a parameter, and `= NULL` matches nothing in SQL —
+so a query written this way returned no rows and an `update` or `delete` did
+nothing, without raising. Check any code that relied on either.
 
 ### `And` and `Or` read the entity from where they are used
 
-Neither takes a type argument above, and neither infers one from its
-conditions — `{ role: "editor" }` is not an entity, so there is nothing there
-to infer from. The entity comes from the position the result lands in, which
-inside `find({ where: … })` is the repository's own.
-
-That is enough almost always. It runs out when the call has no such position:
+Neither takes a type argument above. The entity is read from where the result
+is used, which inside `find({ where: … })` is the repository's own — enough
+almost always, but not when the call has nowhere to read it from:
 
 ```ts
 const rule = And({ role: "editor" });      // no context — falls back
@@ -470,7 +444,7 @@ await users.find({ where: rule });         // ✓
 
 Annotate the variable, or write the call where it is used.
 
-Fixed in **1.1.1**. Before it, the nested example above did not compile at all.
+Requires **1.1.1**.
 
 ## Active record
 
@@ -579,10 +553,8 @@ function syncEntities(entityClasses: EntityConstructor[]): Promise<void>
 function initDatabase(): Promise<void>
 ```
 
-Its own subpath since **1.1.2**, the same arrangement as the drivers. These
-read the filesystem, so exporting them from the root put `node:fs/promises`
-and `node:path` in the import graph of everyone who imported the package —
-including someone who only wanted a type.
+Imported from `@ecosy/orm/migration` since **1.1.2** — they read the
+filesystem, so they stay off the root export.
 
 `syncEntities` runs the same schema sync `initialize` does, for a migration
 script that is not the application's own startup path.
@@ -602,24 +574,17 @@ await projects.insert({ name, wrapId });            // ✓
 await projects.find({ where: { userId }, limit });   // ✓ limit?: number | undefined
 ```
 
-`Partial<T>` is what this replaces, and not as a matter of style — under the
-flag it cannot express what these functions accept:
-
-```ts
-Partial<{ nickname: string | null }>   // { nickname?: string | null }
-```
-
-That set holds no `undefined`, so `{ nickname: undefined }` is rejected — even
-though the ORM treats a missing key and an undefined one identically, since a
-column set to `undefined` is simply not written.
+Data arguments take `PartialInput<T>` rather than `Partial<T>`, which under the
+flag would reject an explicit `undefined`:
 
 ```ts
 type PartialInput<T> = { [K in keyof T]?: T[K] | undefined };
 ```
 
-Nothing is widened beyond that, and return types are untouched: a row that came
-back is not optional in the caller's sense, and relaxing it would only move the
-same problem one step along.
+A missing key and a key set to `undefined` mean the same thing here: the column
+is not written.
+
+Return types are unchanged.
 
 Since **1.1.1**.
 
