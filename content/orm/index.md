@@ -55,7 +55,11 @@ it has no way to know whether it is running in a Next app.
 ```ts
 static create<TName extends string, TCols extends Record<string, ColumnOptions>>(
   entityName: TName,
-  schema: { columns: TCols; indexes?: readonly IndexOptions[] },
+  schema: {
+    columns: TCols;
+    indexes?: readonly IndexOptions[];
+    checks?: readonly CheckOptions[];
+  },
 ): EntityConstructor
 ```
 
@@ -79,7 +83,36 @@ interface IndexOptions {
   columns: readonly string[];
   unique?: boolean;
 }
+
+interface CheckOptions {
+  name: string;
+  expression: string;   // e.g. "price >= 0"
+}
 ```
+
+`checks` reached `Entity.create` in **1.1.5**. The schema builder had handled
+check constraints for far longer, but the parameter type left them out, so
+there was no way to declare one — a feature complete on one side of a door
+that had no handle.
+
+A check is declared here or not at all: sync drops every check on the table it
+does not find declared, including ones it never created. A constraint added by
+hand in `psql` survives exactly until the next boot, which is long enough to
+look like it worked.
+
+### One primary key column
+
+`Entity.create` throws when two columns declare `primaryKey: true`.
+
+The DDL failure is the smaller half. `save()` and `delete()` identify a row
+through a single column, so a two-column key would make `delete()` on a
+`memberships` row keyed `(user_id, project_id)` issue `WHERE user_id = ?` and
+remove that user's membership of every project — no error, and the row that was
+asked for does go away, so nothing looks wrong until something counts.
+
+Use one surrogate key and a unique index over the columns that would have been
+the key. `upsert(data, conflictColumns)` needs only the index, so `ON CONFLICT`
+is unaffected.
 
 Type inference:
 
@@ -122,6 +155,31 @@ graphs — so a driver registered at startup would otherwise be invisible to the
 code that serves requests, and every query would report that none was
 installed. The same key survives a hot reload.
 
+### `logger`
+
+```ts
+static logger(logger: Logger): typeof DataSource
+```
+
+Installs where the package writes. Chainable, alongside `driver` and
+`entities`:
+
+```ts
+await DataSource
+  .logger(appLogger)
+  .entities([User, Post])
+  .initialize(PgDriver(config));
+```
+
+The interface is structural — anything with `info`, `warn` and `error` taking
+varargs satisfies it, so an application logger drops in without an adapter and
+without this package depending on one.
+
+Install it **before** `initialize`, not after: schema sync runs inside
+`initialize`, and its warnings are the only record of a column that was
+renamed or dropped. Added in **1.1.3**; without it the package writes to the
+console.
+
 ### `initialize`
 
 ```ts
@@ -138,9 +196,19 @@ await DataSource
 ```
 
 `initialize` opens the connection and **synchronises every registered entity's
-schema** — creating tables and indexes that do not exist, adding columns that
-were added, and adjusting nullability. A sync that fails rejects, so startup
-stops rather than continuing against a wrong schema.
+schema**. A sync that fails rejects, so startup stops rather than continuing
+against a wrong schema.
+
+Sync is a **mirror, not an accumulation**. It creates what is missing —
+tables, columns, indexes, checks, single-column foreign keys — and it also
+**removes what the entity no longer declares**: columns are dropped with
+whatever they held, and so are indexes and check constraints. That is what
+makes the entity the schema rather than a suggestion, and it is why this
+belongs in development and nowhere near a database holding data you want.
+
+Two things sync cannot change on a table that already exists: the **primary
+key**, and a **composite** foreign key. Moving either needs a migration you
+write, or a database you are willing to rebuild.
 
 Passing the driver to `initialize` is shorthand for calling `driver()` first.
 `end()` closes the pool.
@@ -550,7 +618,13 @@ runs `syncSchema`.
 import { syncEntities, initDatabase } from "@ecosy/orm/migration";
 
 function syncEntities(entityClasses: EntityConstructor[]): Promise<void>
-function initDatabase(): Promise<void>
+
+interface InitDatabaseOptions {
+  migrations?: string;   // default: <cwd>/migrations
+  seeds?: string;        // default: <cwd>/seeds
+}
+
+function initDatabase(options?: InitDatabaseOptions): Promise<void>
 ```
 
 Imported from `@ecosy/orm/migration` since **1.1.2** — they read the
@@ -559,8 +633,35 @@ filesystem, so they stay off the root export.
 `syncEntities` runs the same schema sync `initialize` does, for a migration
 script that is not the application's own startup path.
 
-Schema sync creates what is missing. It does not drop or alter existing
-columns — a renamed or retyped column needs a migration you write.
+`initDatabase` applies numbered `.sql` migrations, then seeds, recording what
+has run in `_migrations` and `_seeds`.
+
+Both directories became arguments in **1.1.5**. They were hardcoded before —
+and to two different conventions — which had a library imposing one project's
+folder layout on every other. The defaults are still relative to
+`process.cwd()`, which is worth knowing about: under a Next.js
+`output: "standalone"` build that is wherever the process was started from, not
+the repository root. Pass absolute paths when the answer has to be certain.
+
+Three behaviours worth stating, all of them **1.1.5**:
+
+Each file runs **inside one transaction on one connection**. It used to issue
+`BEGIN`, the migration, the tracking `INSERT` and `COMMIT` as four separate
+pooled queries — and a pool hands out whichever connection is free per
+statement, so under concurrency the `BEGIN` could open a transaction on one
+connection and the `COMMIT` land on another with nothing to commit. The way
+that failed was the worst available: the schema change applied while the
+tracking row did not, so the next boot ran the file again and hit
+`already exists`.
+
+The whole run holds a **named advisory lock**, so two processes booting
+together do not both decide the same file has not run yet. A driver whose
+dialect exposes no advisory lock runs unguarded and says so.
+
+A failed connection **throws**. It used to return quietly, which turned a
+database that was not ready into a silent success: the application booted on an
+unmigrated schema and the real error surfaced somewhere far away, wearing a
+different name.
 
 ## `exactOptionalPropertyTypes`
 

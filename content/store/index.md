@@ -36,7 +36,7 @@ getState().counter.count;   // 5
 Built on [`Subscriber`](/core/subscriber) from `@ecosy/core`, which is its only
 dependency. No provider, no context — the store is an object you import.
 
-For React bindings see [`@ecosy/react`](/react).
+For React bindings see [`@ecosy/store/react`](/store/react).
 
 ## `createSlice`
 

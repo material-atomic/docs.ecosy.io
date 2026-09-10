@@ -27,7 +27,7 @@ const Card = styled("div", { borderWidth: 1 }, {
 ```
 
 Peer dependencies: `react`, plus `react-native` on mobile, and
-[`@ecosy/store`](/store) with [`@ecosy/react`](/react) for theming.
+[`@ecosy/store`](/store) with [`@ecosy/store/react`](/store/react) for theming.
 
 ## Two entry points, one API
 
@@ -276,7 +276,7 @@ Combines the theme slice with your own, for one store rather than two:
 
 ```ts
 import { withThemeSlice } from "@ecosy/styled/slice";
-import { connectStore } from "@ecosy/react";
+import { connectStore } from "@ecosy/store/react";
 
 export const { useSelector, dispatch } = connectStore(
   withThemeSlice({
