@@ -66,7 +66,7 @@ Nothing to do with the store — it needs only React.
 ### What `Item` receives
 
 ```tsx
-{ ...rest, key: index, item, index }
+{ ...rest, key: index, item, index, previous, next, carry }
 ```
 
 So `UserRow` above is called with `{ dense: true, item, index }`. Declare both:
@@ -79,7 +79,79 @@ function UserRow({ item, index, dense }: { item: User; index: number; dense?: bo
 
 `index` is passed but is **not** in the `ItemProps` constraint — the props are
 cast on the way in, so a component that forgets to declare `index` still
-compiles and still receives it.
+compiles and still receives it. The same goes for `previous`, `next` and
+`carry`: declare the ones you use and ignore the rest.
+
+### `previous` and `next`
+
+The neighbouring entries, or `undefined` at the ends. A date separator or a run
+of messages from one author needs the row before it, and this is how the row
+gets it:
+
+```tsx
+function Message({ item, previous }: { item: Msg; previous?: Msg }) {
+  return (
+    <>
+      {previous?.day !== item.day && <DayDivider day={item.day} />}
+      <Bubble author={previous?.author === item.author ? null : item.author} text={item.text} />
+    </>
+  );
+}
+```
+
+They cost nothing: both are references to entries already in the array, not
+copies. Computing the same thing outside and passing it in means a fresh object
+per row, which is what stops `memo(Item)` bailing out.
+
+Since **0.5.0**.
+
+### `accumulate` — a running value
+
+For what `previous` cannot answer: a number that runs within a group, a balance
+after each entry, an offset.
+
+It is a **scan, not a reduce**. The fold runs as each row is reached, so a row
+receives the total **including itself** and never one that counts rows below it:
+
+```tsx
+<Listing
+  items={[1, 2, 3]}
+  Item={Row}
+  seed={0}
+  accumulate={(carry, n) => carry + n}
+/>
+// Row 1 gets carry 1, row 2 gets 3, row 3 gets 6.
+```
+
+A running number that restarts per group is the same shape:
+
+```tsx
+<Listing
+  items={messages}
+  Item={Message}
+  itemKey="id"
+  seed={{ day: "", n: 0 }}
+  accumulate={(c, m) => (c.day === m.day ? { day: c.day, n: c.n + 1 } : { day: m.day, n: 1 })}
+/>
+```
+
+Optional in the sense that matters: without it, `carry` is `undefined`, `seed`
+never reaches `Item`, and the cost is one destructure and one `if` per row.
+
+**When the carry is an object, return the one you were given if nothing in it
+changed.** A fold that rebuilds it every row hands every row a new prop and
+`memo(Item)` stops bailing out. A carry that is a number is a new value each
+row by definition — that is the point of it — and nothing applies.
+
+The fold runs during render, into a local variable. Not a `useRef`: a ref
+survives renders React discards — a StrictMode double render, a concurrent
+attempt thrown away — so an accumulation into one counts twice, and only in
+development or only under load. A ref would also have to be cleared at row 0 of
+every render, which is the tell: something reset every render is not carrying
+anything across renders. `Listing` uses no hooks at all, and can still be
+called as a plain function.
+
+Since **0.5.0**.
 
 ### Forwarded props are checked
 
