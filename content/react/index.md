@@ -107,18 +107,66 @@ Since **0.6.0**.
 
 ### `range` — a window over the whole list
 
-What a virtualizer hands over. `start` inclusive, `end` exclusive:
+What a virtualizer hands over. `start` inclusive, `end` exclusive.
+
+The whole thing, with `@tanstack/react-virtual`:
 
 ```tsx
+const scroller = useRef<HTMLDivElement>(null);
+const virtualizer = useVirtualizer({
+  count: messages.length,
+  getScrollElement: () => scroller.current,
+  estimateSize: () => 72,
+  overscan: 8,
+});
+
 const rows = virtualizer.getVirtualItems();
 
-<Listing
-  items={messages}                                   // the whole list
-  range={{ start: rows[0].index, end: rows.at(-1).index + 1 }}
-  Item={Message}
-  itemKey="id"
-/>
+// One prop, one reference, every row — the same shape `accumulate` asks for
+// once a list is virtualised. Rebuilt per scroll, which is correct: the rows
+// it describes are the ones on screen.
+const placed = useMemo(() => new Map(rows.map((r) => [r.index, r])), [rows]);
+
+<div ref={scroller} style={{ height: 600, overflow: "auto" }}>
+  <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+    <Listing
+      items={messages}                                        // the whole list
+      range={{ start: rows[0]?.index ?? 0, end: (rows.at(-1)?.index ?? -1) + 1 }}
+      Item={Message}
+      itemKey="id"
+      placed={placed}
+      measure={virtualizer.measureElement}
+    />
+  </div>
+</div>
 ```
+
+`placed` and `measure` are forwarded straight through. `Listing` neither reads
+nor understands them — the row does:
+
+```tsx
+function Message({ item, index, previous, placed, measure }: MessageProps) {
+  const at = placed.get(index);
+
+  return (
+    <div
+      ref={measure}
+      data-index={index}
+      style={{ position: "absolute", top: 0, insetInline: 0,
+               transform: `translateY(${at?.start ?? 0}px)` }}
+    >
+      {previous?.day !== item.day && <DayDivider day={item.day} />}
+      <Bubble text={item.text} />
+    </div>
+  );
+}
+```
+
+`previous` is the real entry above, not the first row of the window, so the
+divider appears once — at the day boundary — and not again at the top of every
+scroll position. And `data-index` is the true index, which is what
+`measureElement` reads to know which row it just measured; `range` is what kept
+it true.
 
 `items` stays the **full** list. Only the rows in range are built, so the cost
 is the window — holding a reference to an array is not walking it, and
