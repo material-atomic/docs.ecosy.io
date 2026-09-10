@@ -105,6 +105,48 @@ per row, which is what stops `memo(Item)` bailing out.
 
 Since **0.6.0**.
 
+### `range` — a window over the whole list
+
+What a virtualizer hands over. `start` inclusive, `end` exclusive:
+
+```tsx
+const rows = virtualizer.getVirtualItems();
+
+<Listing
+  items={messages}                                   // the whole list
+  range={{ start: rows[0].index, end: rows.at(-1).index + 1 }}
+  Item={Message}
+  itemKey="id"
+/>
+```
+
+`items` stays the **full** list. Only the rows in range are built, so the cost
+is the window — holding a reference to an array is not walking it, and
+`items[i - 1]` costs the same whether the array holds twenty entries or fifty
+thousand.
+
+A range rather than a pre-cut slice, and the difference is the whole point.
+Hand `Listing` a slice and `index` counts from the window instead of the list,
+and `previous` is `undefined` at the top of every scroll position — so a date
+separator redraws at the head of each window and a run of messages from one
+author breaks every time the user scrolls. Neither reports an error. Both are
+right on a short list and wrong once it is long enough to virtualise, which is
+exactly when nobody is scrolling by hand to notice.
+
+An `end` past the array is clamped, not refused: a virtualizer overshoots at
+the edges by design.
+
+**`range` and `accumulate` together throw.** A fold restarted at the window's
+first row gives every row a total that ignores the rows above it — correct at
+the top of the list and drifting the further anyone scrolls. A virtualised list
+wants its running values computed once, incrementally, outside, and passed in
+as one stable `Map`; that is what the virtualizer already does for heights.
+
+Measuring needs nothing from `Listing`: it touches no DOM and `Item` is yours,
+so `ref={virtualizer.measureElement}` goes where you decide.
+
+Since **0.7.0**.
+
 ### `accumulate` — a running value
 
 For what `previous` cannot answer: a number that runs within a group, a balance
