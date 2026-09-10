@@ -118,14 +118,16 @@ const virtualizer = useVirtualizer({
   getScrollElement: () => scroller.current,
   estimateSize: () => 72,
   overscan: 8,
+  // Keyed by id, not by position — see below.
+  getItemKey: (index) => messages[index].id,
 });
 
 const rows = virtualizer.getVirtualItems();
 
-// One prop, one reference, every row — the same shape `accumulate` asks for
-// once a list is virtualised. Rebuilt per scroll, which is correct: the rows
-// it describes are the ones on screen.
-const placed = useMemo(() => new Map(rows.map((r) => [r.index, r])), [rows]);
+// Position data the virtualizer already computed, narrowed to a lookup. Rebuilt
+// every frame, and that is right: it describes the rows on screen, and there is
+// only ever a screen's worth of those.
+const placed = new Map(rows.map((r) => [r.index, r]));
 
 <div ref={scroller} style={{ height: 600, overflow: "auto" }}>
   <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
@@ -167,6 +169,32 @@ divider appears once — at the day boundary — and not again at the top of eve
 scroll position. And `data-index` is the true index, which is what
 `measureElement` reads to know which row it just measured; `range` is what kept
 it true.
+
+#### `getItemKey` is not optional on a list that prepends
+
+The virtualizer's measured-height cache is keyed by whatever `getItemKey`
+returns, and it **defaults to the index**. On a list that only ever appends,
+that is fine. On one that prepends — scrolling up to load older history — every
+backfill shifts every index, so a height measured for one message is handed to
+another. The list jumps immediately after loading history, and nothing reports
+it.
+
+Keying by id fixes it, and the id is already there: the same one `itemKey="id"`
+gives `Listing`. Both keyings then agree about what a row is.
+
+#### `placed` is not the Map that replaces `accumulate`
+
+They are the same type and the opposite lifetime, and the lifetime is the half
+that matters.
+
+`placed` is position data the virtualizer **already computed**, narrowed to a
+lookup. Rebuilding it every frame costs one pass over the visible rows, and the
+rows it describes change every frame anyway.
+
+The Map that stands in for `accumulate` holds running values over the **whole**
+list. It has to be built once and extended as data arrives — rebuilding that one
+per frame is precisely the cost that ruled `accumulate` out for virtualised
+lists.
 
 `items` stays the **full** list. Only the rows in range are built, so the cost
 is the window — holding a reference to an array is not walking it, and
