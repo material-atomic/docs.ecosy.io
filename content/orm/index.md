@@ -200,7 +200,8 @@ schema**. A sync that fails rejects, so startup stops rather than continuing
 against a wrong schema.
 
 Sync is a **mirror, not an accumulation**. It creates what is missing —
-tables, columns, indexes, checks, single-column foreign keys — and it also
+tables, columns, indexes, checks, and — since **1.1.6** — single-column
+foreign keys, including their `ON DELETE` and `ON UPDATE` clauses. It also
 **removes what the entity no longer declares**: columns are dropped with
 whatever they held, and so are indexes and check constraints. That is what
 makes the entity the schema rather than a suggestion, and it is why this
@@ -636,14 +637,14 @@ script that is not the application's own startup path.
 `initDatabase` applies numbered `.sql` migrations, then seeds, recording what
 has run in `_migrations` and `_seeds`.
 
-Both directories became arguments in **1.1.5**. They were hardcoded before —
+Both directories became arguments in **1.1.6**. They were hardcoded before —
 and to two different conventions — which had a library imposing one project's
 folder layout on every other. The defaults are still relative to
 `process.cwd()`, which is worth knowing about: under a Next.js
 `output: "standalone"` build that is wherever the process was started from, not
 the repository root. Pass absolute paths when the answer has to be certain.
 
-Three behaviours worth stating, all of them **1.1.5**:
+Three behaviours worth stating, all of them **1.1.6**:
 
 Each file runs **inside one transaction on one connection**. It used to issue
 `BEGIN`, the migration, the tracking `INSERT` and `COMMIT` as four separate
