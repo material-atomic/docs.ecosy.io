@@ -103,7 +103,7 @@ They cost nothing: both are references to entries already in the array, not
 copies. Computing the same thing outside and passing it in means a fresh object
 per row, which is what stops `memo(Item)` bailing out.
 
-Since **0.5.0**.
+Since **0.6.0**.
 
 ### `accumulate` — a running value
 
@@ -151,7 +151,7 @@ every render, which is the tell: something reset every render is not carrying
 anything across renders. `Listing` uses no hooks at all, and can still be
 called as a plain function.
 
-Since **0.5.0**.
+Since **0.6.0**.
 
 ### Forwarded props are checked
 
