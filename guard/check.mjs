@@ -44,7 +44,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadContent, apiHeadings, inlineSpans } from "./lib/content.mjs";
-import { resolveTypes, namesOf, codeEntries, memberNamesOf, isFunctionDeclaration, memberLookupStats, resetMemberLookupStats } from "./lib/dts.mjs";
+import {
+  resolveTypes,
+  namesOf,
+  codeEntries,
+  memberNamesOf,
+  isFunctionDeclaration,
+  memberLookupStats,
+  resetMemberLookupStats,
+  matchExportKey,
+  declShapesOf,
+  compareSurfaces,
+} from "./lib/dts.mjs";
 import { resolvePackage } from "./lib/registry.mjs";
 
 const ROOT = path.join(import.meta.dirname, "..");
@@ -100,8 +111,37 @@ const BUILTIN_NAMESPACES = new Set([
   "Map", "Set", "WeakMap", "WeakSet", "Error", "RegExp", "URL",
 ]);
 
-function wordIn(text, word) {
-  return new RegExp("(^|[^\\w$])" + word.replace(/[$]/g, "\\$") + "($|[^\\w$])").test(text);
+/**
+ * The module specifiers a set of pages actually CITE — not words that happen
+ * to look like one.
+ *
+ * Three sources, all of them places a writer had to name a subpath on
+ * purpose:
+ *   - a real specifier position in a fenced block: `from "…"`, `import("…")`,
+ *     `require("…")`;
+ *   - an `@scope/pkg/sub` inside an inline code span in running prose, which
+ *     is this site's convention for citing one without a code block;
+ *   - the hand-written frontmatter `import:` / `name:`, which is independent
+ *     of the body entirely (the same field pageOwnEntry() already trusts).
+ *
+ * English cannot produce any of these by accident, which is the entire point:
+ * `"a batch of entries can be lost"` is a sentence about log buffering and
+ * `@ecosy/core/batch` is a debounce module, and the old coverage test could
+ * not tell them apart.
+ */
+function citedSpecifiers(pages) {
+  const out = new Set();
+  for (const page of pages) {
+    for (const block of page.codeBlocks.concat(page.bashBlocks))
+      for (const m of block.matchAll(/(?:from|import|require)\s*\(?\s*["']([^"']+)["']/g)) out.add(m[1]);
+    for (const span of inlineSpans(page.prose)) {
+      const t = span.trim();
+      if (/^@[\w-]+\/[\w-]+(?:\/[\w.-]+)*$/.test(t)) out.add(t);
+    }
+    if (page.data.import) out.add(page.data.import);
+    if (page.data.name) out.add(page.data.name);
+  }
+  return out;
 }
 
 // ---------- surfaces: one per npm package referenced from content ----------
@@ -453,10 +493,37 @@ function checkFamilyLinks(groups, surfaces) {
 // CHECK D — entry-point coverage (+ the core-consolidation boundary)
 // ================================================================
 
+/**
+ * Every exported name of a package WITH its shape, merged across entry
+ * points. Read lazily and memoised per surface object: only the handful of
+ * entry points that have a slug-collision candidate ever need it, and paying
+ * declShapesOf() for all sixteen packages up front would roughly double the
+ * guard's local work for nothing.
+ *
+ * The cache is kept outside the surface object on purpose — the surfaces are
+ * serialised into guard/last-run.json, and a Map stringifies to `{}`, so
+ * hanging it off the surface would write a permanent, meaningless field into
+ * the artifact people read.
+ */
+const shapeCache = new WeakMap();
+
+function surfaceShapes(surface) {
+  const hit = shapeCache.get(surface);
+  if (hit) return hit;
+  const merged = new Map();
+  for (const info of Object.values(surface.entryNames)) {
+    if (!info.typesFile) continue;
+    for (const [n, s] of declShapesOf(surface.dir, info.typesFile.replace(/^\.\//, ""))) if (!merged.has(n)) merged.set(n, s);
+  }
+  shapeCache.set(surface, merged);
+  return merged;
+}
+
 function checkEntryPoints(groups, surfaces) {
   const bad = [];
   const boundary = [];
   let entriesChecked = 0;
+  let citationsResolved = 0;
 
   // slug -> npm name, for the boundary check ("did this get absorbed into another package's exports?")
   const npmBySlug = {};
@@ -472,8 +539,10 @@ function checkEntryPoints(groups, surfaces) {
   // queue, cache, …) got re-flagged as missing AGAIN from the "logger" and
   // "schedule" groups' own narrow text — 20 brand-new false MISSING-ENTRYPOINT
   // findings for entries that were never in either page's job to cover.
-  // Coverage has to be judged against the POOLED text of every group that
-  // shares the package's npm name, not one group alone.
+  // Coverage has to be judged across every group that shares the package's
+  // npm name, not one group alone. (B2b pooled those groups' page TEXT;
+  // since 0062 it pools the specifiers they CITE — see the coverage test
+  // below for why the text version could not be made correct.)
   const groupsByNpm = {};
   for (const g of Object.values(groups)) {
     if (!g.meta.npm) continue;
@@ -483,7 +552,20 @@ function checkEntryPoints(groups, surfaces) {
   for (const [npm, npmGroups] of Object.entries(groupsByNpm)) {
     const surface = surfaces[npm];
     if (!surface) continue;
-    const fullText = npmGroups.flatMap((g) => g.pages.map((p) => p.body)).join("\n");
+    // Which entry points this package's pages actually cite, resolved through
+    // the package's OWN exports map: `@ecosy/markdoc/plugins/layout` lands on
+    // the `./plugins/*` key, so a wildcard family is covered by any concrete
+    // member of it, and a subpath nobody imports is covered by nothing.
+    const cited = citedSpecifiers(npmGroups.flatMap((g) => g.pages));
+    const coveredIds = new Set();
+    for (const spec of cited) {
+      if (spec !== npm && !spec.startsWith(npm + "/")) continue;
+      const sub = spec === npm ? "." : "." + spec.slice(npm.length);
+      const key = matchExportKey(surface.dir, sub);
+      if (!key) continue; // cites a subpath this package doesn't export — CHECK A and CHECK C report that separately
+      citationsResolved++;
+      coveredIds.add(key.replace(/^\.\//, "").replace(/\/\*$/, ""));
+    }
     // Anchor page for reporting: the group whose own slug matches the
     // package's bare name (core, http, …) when one exists, else whichever
     // group was seen first — purely cosmetic, does not affect the check.
@@ -516,35 +598,76 @@ function checkEntryPoints(groups, surfaces) {
       const firstSeg = id.split("/")[0];
       const otherPkg = npmBySlug[firstSeg];
       const otherSurface = otherPkg && otherPkg !== npm ? surfaces[otherPkg] : null;
-      const overlap = otherSurface && info ? [...info.names].filter((n) => otherSurface.allNames.has(n)) : [];
 
-      if (otherSurface && overlap.length > 0) {
+      // Overlap is scored by SHAPE, not by intersecting name strings. A name
+      // set intersection is wrong in both directions at once, and the
+      // `@ecosy/schedule` -> `@ecosy/core/schedule` move proved both on the
+      // same day: `Hook` -> `HookPort` and `Source` -> `SourceClass` were
+      // real renames the intersection could not see (so it reported 38/52,
+      // "divergent", when core was a superset), while the strings `Hook` and
+      // `Source` did still exist on both sides carrying UNRELATED meanings
+      // (so part of that 38 was counted for nothing). compareSurfaces()
+      // separates the four cases and only `same + renamed` is evidence.
+      const cmp =
+        otherSurface && info && info.typesFile
+          ? compareSurfaces(declShapesOf(surface.dir, info.typesFile.replace(/^\.\//, "")), surfaceShapes(otherSurface))
+          : null;
+      const matched = cmp ? cmp.same.length + cmp.renamed.length : 0;
+
+      if (otherSurface && matched > 0) {
         boundary.push({
           kind: "ENTRYPOINT-OVERLAPS-PACKAGE",
           page: groups[firstSeg].pages[0].href,
           pkg: npm,
           entry: id,
           taughtAsPackage: otherPkg,
-          overlap: overlap.length,
+          overlap: matched,
+          sameName: cmp.same.length,
+          renamed: cmp.renamed, // the actual `X->XPort` pairs, so a rename is named, not just counted
+          collided: cmp.collided, // same name, different meaning — reported, never counted as overlap
+          unknownShape: cmp.unknown.length,
           entrySurface: info.names.size,
           otherSurface: otherSurface.allNames.size,
           pages: groups[firstSeg].pages.map((p) => p.href),
         });
-        continue; // real overlap confirmed — this id IS documented, just under the other package's page
+        continue; // measured overlap — this id IS documented, just under the other package's page
       }
       // No overlap (or no candidate at all): an ordinary entry point, judged
       // on its own merits — falls through to the same missing-or-not check
       // every other entry gets. A candidate that failed the overlap test
       // must NOT `continue` here, or it silently escapes MISSING-ENTRYPOINT
       // by virtue of sharing a slug with an unrelated package.
-      const nameHit = info && [...info.names].some((n) => wordIn(fullText, n));
-      const idHit = wordIn(fullText, id.split("/").pop());
-      if (!nameHit && !idHit)
+      // Coverage is a RESOLUTION, not a string search. The old test was
+      // `wordIn(fullText, <last path segment>) || wordIn(fullText, <any
+      // export name>)` over every pooled page body — so the English sentence
+      // "a batch of entries can be lost" (about log buffering) marked
+      // `@ecosy/core/batch` (a debounce module) documented, and the cron
+      // handler key `"session.cleanup"` in a worked example marked
+      // `@ecosy/core/session` (cookie sessions) documented. Two modules with
+      // no documentation at all read as covered, which is the guard lying in
+      // the dangerous direction.
+      //
+      // Measured on this commit's content before choosing this shape: the
+      // specifier test clears 45 of the 53 entry points with ZERO entries
+      // that lose coverage for being written another way, and the three the
+      // word search wrongly cleared go red. The weaker shapes were measured
+      // and rejected, not assumed — "appears in a code block" still clears
+      // `session` (content/schedule/index.md:231 is a ```ts block containing
+      // `Registry("session.cleanup", …)`), and "appears in a heading" still
+      // clears `@ecosy/markdoc/imports` (`## \`imports\`` on
+      // content/markdoc/index.md:317 documents an options FIELD called
+      // `imports`, not the subpath).
+      //
+      // The export-name half is gone rather than kept as a fallback: no entry
+      // point on this commit is cleared by a name hit that the specifier test
+      // does not already clear, so it bought nothing and carried the same
+      // coincidence risk one level deeper.
+      if (!coveredIds.has(id))
         bad.push({ kind: "MISSING-ENTRYPOINT", page: anchorGroup.pages[0].href, pkg: npm, entry: id, pages: allPages });
     }
   }
 
-  return { bad, boundary, entriesChecked };
+  return { bad, boundary, entriesChecked, citationsResolved };
 }
 
 // ================================================================
@@ -752,6 +875,14 @@ export async function run(opts) {
     inlineSpansChecked: C.inlineSpansChecked,
     dottedProseChecked: C.dottedProseChecked,
     entryPointsChecked: D.entriesChecked,
+    // How many cited specifiers actually resolved to an exports key. This is
+    // the INPUT to entry-point coverage, and it needs its own floor for the
+    // reason B2b paid for: a coverage number can fall either because things
+    // got documented or because the guard stopped seeing the citations, and
+    // the two look identical in a findings list. Zero here with a nonzero
+    // entryPointsChecked would mean every entry is "undocumented" because
+    // nothing was read, not because nothing was written.
+    entryCitationsResolved: D.citationsResolved,
     urlsChecked: E.urlsChecked,
     familyLinksChecked: F.linksChecked,
     // Visibility, not a pass/fail floor: how often memberNamesOf() (the
@@ -778,6 +909,11 @@ export async function run(opts) {
     inlineSpansChecked: 1,
     dottedProseChecked: 1,
     entryPointsChecked: 1,
+    // Floor 16, not 1: one package resolving a citation while the other
+    // fifteen resolve none would sail past a floor of 1 and mark 50-odd entry
+    // points missing for no reason anyone could see. Measured on this commit:
+    // 71.
+    entryCitationsResolved: 16,
     familyLinksChecked: 1,
   };
   // urlsChecked is legitimately 0 when off-page was deliberately skipped

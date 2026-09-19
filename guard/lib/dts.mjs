@@ -100,6 +100,34 @@ export function resolveTypes(pkgDir, sub) {
   return null;
 }
 
+/**
+ * Which key in package.json#exports a subpath actually resolves THROUGH —
+ * `"./plugins/layout"` comes back as `"./plugins/*"`, not as itself.
+ *
+ * resolveTypes() answers "what file", which is the wrong question when the
+ * caller wants to know "is this entry point the one the docs just cited": a
+ * wildcard key's types value still contains a literal `*`, so comparing
+ * resolved filenames never matches a concrete subpath against the wildcard
+ * that serves it. Asking the exports map which KEY matched is the package's
+ * own answer to "same entry point or not", which is what makes
+ * checkEntryPoints's coverage test a resolution rather than a string search.
+ */
+export function matchExportKey(pkgDir, sub) {
+  const pj = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"));
+  const exp = pj.exports;
+  if (!exp || typeof exp === "string") return sub === "." ? "." : null;
+  if (exp[sub] !== undefined) return sub;
+  for (const k of Object.keys(exp)) {
+    if (!k.includes("*")) continue;
+    const [pre, post] = k.split("*");
+    // The length guard keeps `./plugins` from matching `./plugins/*` with an
+    // empty star — a bare subpath is a DIFFERENT entry point from the
+    // wildcard family below it, even when the package declares both.
+    if (sub.length >= pre.length + post.length && sub.startsWith(pre) && sub.endsWith(post)) return k;
+  }
+  return null;
+}
+
 /** All subpaths declared in package.json#exports, minus the ones that carry no code. */
 export function codeEntries(pkgDir) {
   const pj = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"));
@@ -292,6 +320,137 @@ function memberNamesOfInner(pkgDir, rel, name, seen) {
     if (mm) members.add(mm[1]);
   }
   return members;
+}
+
+/**
+ * Which keyword declares `name`, chasing the same two re-export hops namesOf()
+ * follows. `null` when the declaration was never found.
+ *
+ * Deliberately NOT routed through memberLookupStats: that counter reports how
+ * often the Foo.bar() member check could not tell, and folding surface
+ * comparison calls into it would move a published number for a reason that
+ * has nothing to do with what it measures.
+ */
+function declKindOf(pkgDir, rel, name, seen) {
+  const found = resolveFile(pkgDir, rel);
+  if (!found || seen.has(found.f + "#" + name)) return null;
+  seen.add(found.f + "#" + name);
+  const src = fs.readFileSync(found.f, "utf8");
+  const m = new RegExp(
+    "export\\s+(?:declare\\s+)?(?:abstract\\s+)?(class|interface|type|enum|function|const|let|var|namespace)\\s+" +
+      name.replace(/[$]/g, "\\$") +
+      "\\b",
+    "m",
+  ).exec(src);
+  if (m) return m[1];
+  for (const rm of src.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["'](\.[^"']*)["']/g)) {
+    const names = rm[1].split(",").map((s) => s.trim().replace(/^type\s+/, "").split(/\s+as\s+/));
+    const hit = names.find(([orig, alias]) => (alias || orig) === name);
+    if (hit) {
+      const k = declKindOf(pkgDir, path.join(path.dirname(found.rel), rm[2]), hit[0], seen);
+      if (k) return k;
+    }
+  }
+  for (const rm of src.matchAll(/export\s+(?:type\s+)?\*\s+from\s+["'](\.[^"']*)["']/g)) {
+    const k = declKindOf(pkgDir, path.join(path.dirname(found.rel), rm[1]), name, seen);
+    if (k) return k;
+  }
+  return null;
+}
+
+/**
+ * Every exported name of a .d.ts WITH the shape behind it:
+ * `{ kind, members }`, members being a Set, or `null` when this text scan
+ * genuinely could not read the declaration (same contract as memberNamesOf).
+ *
+ * namesOf() answers "does this string exist here". This answers "what is it".
+ * That is the whole difference between a LABEL and a MEASUREMENT, and it is
+ * why compareSurfaces() below can tell `@ecosy/schedule`'s `Hook` (a const
+ * with `.combine`) from `@ecosy/core/schedule`'s `Hook` (an interface with
+ * `notify`) instead of counting them as one shared name.
+ */
+export function declShapesOf(pkgDir, rel) {
+  const out = new Map();
+  for (const name of namesOf(pkgDir, rel)) {
+    const kind = declKindOf(pkgDir, rel, name, new Set());
+    const members = kind === "function" ? new Set() : memberNamesOfInner(pkgDir, rel, name, new Set());
+    out.set(name, { kind, members });
+  }
+  return out;
+}
+
+/**
+ * Do two declarations describe the same thing?
+ *   true  — same family, and one member set contains the other
+ *   false — definitely not (function vs value, or disjoint members)
+ *   null  — cannot tell (one side's shape was unreadable)
+ *
+ * `null` is not `false` and must never be counted as a match: an unproven
+ * match that suppressed a MISSING-ENTRYPOINT would be the guard lying in the
+ * dangerous direction, which is exactly the failure this whole change exists
+ * to remove.
+ */
+function sameShape(a, b) {
+  if (!a || !b) return null;
+  const aFn = a.kind === "function";
+  const bFn = b.kind === "function";
+  if (aFn !== bFn) return false;
+  if (aFn) return true; // no member namespace on either side — nothing left to disagree about
+  if (a.members === null || b.members === null) return null;
+  if (a.members.size === 0 || b.members.size === 0) return null; // an empty body proves nothing either way
+  const shared = [...a.members].filter((n) => b.members.has(n)).length;
+  if (shared === 0) return false;
+  return shared === Math.min(a.members.size, b.members.size);
+}
+
+/**
+ * Compare an entry point's surface against another package's surface by
+ * SHAPE, and say which of four things each name is:
+ *
+ *   same      — present on both sides, shapes agree
+ *   renamed   — absent by name, but exactly one name over there has the
+ *               identical shape (`Hook` -> `HookPort`, `Source` ->
+ *               `SourceClass`: the rename that made a plain name
+ *               intersection report `schedule 38/52` as divergence when core
+ *               was in fact a superset)
+ *   collided  — SAME NAME, different meaning. Never evidence of anything;
+ *               reported so it is visible rather than silently counted as
+ *               overlap the way a set intersection counts it.
+ *   unknown   — one side's shape could not be read; deliberately not a match
+ *   absent    — genuinely not over there
+ *
+ * "Is this the same API taught twice" is `same + renamed`, and nothing else.
+ */
+export function compareSurfaces(entryShapes, otherShapes) {
+  const same = [];
+  const renamed = [];
+  const collided = [];
+  const unknown = [];
+  const absent = [];
+  for (const [name, shape] of entryShapes) {
+    if (otherShapes.has(name)) {
+      const verdict = sameShape(shape, otherShapes.get(name));
+      if (verdict === true) same.push(name);
+      else if (verdict === null) unknown.push(name);
+      else collided.push(name);
+      continue;
+    }
+    // A rename only counts when the twin is UNIQUE and the shape is
+    // DISTINCTIVE (a named member set). Several same-shaped candidates means
+    // the shape can't identify anything, and picking one would be a guess
+    // wearing a measurement's clothes. Two bare `function`s match each other
+    // under sameShape() for the member check's purposes but carry no evidence
+    // of being the same API, so they are excluded here rather than loosening
+    // sameShape() for everyone.
+    const distinctive = shape.kind !== "function" && shape.members !== null && shape.members.size > 0;
+    const twins = distinctive ? [...otherShapes].filter(([, s]) => sameShape(shape, s) === true) : [];
+    if (twins.length === 1) {
+      renamed.push(`${name}->${twins[0][0]}`);
+      continue;
+    }
+    absent.push(name);
+  }
+  return { same, renamed, collided, unknown, absent };
 }
 
 /**

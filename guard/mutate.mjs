@@ -8,15 +8,37 @@
  * copy, or a synthesized off-page fixture), never the guard's own source —
  * the guard under test is the exact same guard/check.mjs used for real runs.
  *
- * All ten cases below build their own inputs from THIS commit's content/ —
- * none of them depend on anything outside the repo (no pre-fetched live
- * files, no scratchpad directory). Reviewer found the previous version's M5
+ * Every case below builds its own inputs from THIS commit's content/ and
+ * guard/.cache — none of them depend on anything outside the repo (no
+ * pre-fetched live files, no scratchpad directory). Reviewer found the
+ * previous version's M5
  * silently SETUP-FAILED for exactly that reason on a fresh checkout; the
  * off-page fixtures (llms.txt / llms-full.txt / search.json) are now built
  * by synthesizeOffPage() below, in the same shape the real site generates
  * (Source: lines, markdown links, a JSON array), from content/ itself.
  *
- * Usage: node guard/mutate.mjs
+ * Three kinds of case live here:
+ *   - ordinary        — mutate an input, require a specific finding KIND
+ *                       carrying a literal only this mutation can produce
+ *                       (`expectPage` is matched as a substring of the
+ *                       finding line, so it is usually the mutated entry's
+ *                       own name rather than a page path: a page that is
+ *                       already red for other reasons would otherwise let a
+ *                       case pass for free — 0057/B2b lost a round to
+ *                       exactly that);
+ *   - `control: true` — mutate an input that is CORRECT, require the finding
+ *                       to be ABSENT, plus a sight-proof that the guard did
+ *                       look (a count that rose, or a companion finding).
+ *                       Without these, a tightened rule can only be shown to
+ *                       bark, never to be right;
+ *   - `widen: true`   — no fixed expectation, record what happened.
+ *
+ * Usage:
+ *   node guard/mutate.mjs
+ *   GUARD_CHECK_BIN=/path/to/older/guard/check.mjs node guard/mutate.mjs
+ *     — same cases against a previous guard, which is how a new case proves
+ *       it is testing the change it claims to test instead of riding along
+ *       on something that already worked.
  */
 
 import fs from "node:fs";
@@ -28,6 +50,13 @@ import { loadContent } from "./lib/content.mjs";
 const ROOT = path.join(import.meta.dirname, "..");
 const REAL_CONTENT = path.join(ROOT, "content");
 const REAL_CACHE = path.join(ROOT, "guard", ".cache");
+
+// Which check.mjs is under test. Normally this repo's own, but overridable so
+// the same cases can be run against an OLDER checkout of the guard — that is
+// how "this case CAUGHT because of the thing it changed" gets measured rather
+// than asserted: a case that is CAUGHT here and CAUGHT on the previous guard
+// too was never testing the change it claims to test. See the note on M8.
+const CHECK_BIN = process.env.GUARD_CHECK_BIN || path.join(ROOT, "guard", "check.mjs");
 
 function freshContentCopy() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-guard-content-"));
@@ -107,7 +136,7 @@ function offPageArgs(files) {
 
 function runGuard(args, env = {}) {
   try {
-    const out = execFileSync("node", [path.join(ROOT, "guard", "check.mjs"), ...args], {
+    const out = execFileSync("node", [CHECK_BIN, ...args], {
       encoding: "utf8",
       env: { ...process.env, ...env },
     });
@@ -115,6 +144,12 @@ function runGuard(args, env = {}) {
   } catch (e) {
     return { code: e.status ?? 1, out: (e.stdout || "") + (e.stderr || "") };
   }
+}
+
+/** Pull one number out of the guard's `counts:` line — used to tell "clean" from "blind". */
+function countFromOutput(out, key) {
+  const m = out.match(new RegExp(`"${key}":(\\d+)`));
+  return m ? Number(m[1]) : null;
 }
 
 function hasFinding(out, kind, page) {
@@ -331,6 +366,192 @@ cases.push({
   },
 });
 
+// ---------------------------------------------------------------------------
+// M8 / M8b / M9 / M10 — the entry-point coverage rule stopped being a string
+// search (task 0062). Every one of these was measured against the PRE-FIX
+// guard as well; see the SURVIVED-before/CAUGHT-after note on each.
+// ---------------------------------------------------------------------------
+
+// M8 — the `"a batch of entries can be lost"` shape, verbatim in structure:
+// a real, undocumented entry point whose last path segment happens to be an
+// ordinary English word used in running PROSE about something else entirely.
+// This is the bug that shipped: `@ecosy/core/batch` (debounce) read as
+// documented because content/logger/index.md:237 says a batch of log entries
+// can be lost. Pre-fix guard: SURVIVED (idHit matched the prose word).
+cases.push({
+  name: "M8 entrypoint: undocumented subpath 'rejoinder' cleared by a coincidental PROSE word",
+  expectKind: "MISSING-ENTRYPOINT",
+  // The mutated entry's own id, not a page path: the specific signal is the
+  // `"entry":"rejoinder"` field this mutation alone introduces. Matching on
+  // "/http" would let the case pass off some unrelated finding as its own.
+  expectPage: "rejoinder",
+  setup() {
+    const contentDir = freshContentCopy();
+    const f = path.join(contentDir, "http", "index.md");
+    let src = fs.readFileSync(f, "utf8");
+    const before = src;
+    src = src.replace(
+      "Zero dependencies, built on `fetch`.",
+      "A failed request carries a rejoinder of its own, so a rejoinder of retries can be\nlost on process exit — drain the queue before shutdown.\n\nZero dependencies, built on `fetch`.",
+    );
+    if (src === before) throw new Error("M8 setup: anchor sentence not found — content moved?");
+    fs.writeFileSync(f, src);
+
+    const cacheDir = freshCacheCopy();
+    const pkgRoot = findCachedPackageDir(cacheDir, "@ecosy/http");
+    fs.writeFileSync(path.join(pkgRoot, "dist", "rejoinder.d.ts"), "export declare function makeRejoinder(): void;\n");
+    const pjFile = path.join(pkgRoot, "package.json");
+    const pj = JSON.parse(fs.readFileSync(pjFile, "utf8"));
+    pj.exports["./rejoinder"] = { types: "./dist/rejoinder.d.ts", import: "./dist/rejoinder.d.ts", require: "./dist/rejoinder.d.ts" };
+    fs.writeFileSync(pjFile, JSON.stringify(pj, null, 2));
+    return { args: ["--content-dir", contentDir, "--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
+  },
+});
+
+// M8b — the `"session.cleanup"` shape: the same coincidence, but inside a
+// FENCED ```ts BLOCK rather than prose. This case exists because "require the
+// name to appear in a code block" was one of the shapes considered for the
+// fix, and this is the measurement that rejected it: `@ecosy/core/session`'s
+// only word hit is `Registry("session.cleanup", …)` at
+// content/schedule/index.md:231, which IS a code block. A code-block rule
+// would have left the shipped bug in place.
+cases.push({
+  name: "M8b entrypoint: undocumented subpath cleared by a coincidence inside a ```ts BLOCK",
+  expectKind: "MISSING-ENTRYPOINT",
+  expectPage: "tessellate",
+  setup() {
+    const contentDir = freshContentCopy();
+    const f = path.join(contentDir, "http", "index.md");
+    let src = fs.readFileSync(f, "utf8");
+    const before = src;
+    src = src.replace(
+      "Zero dependencies, built on `fetch`.",
+      '```ts\nconst job = Registry("tessellate.cleanup", { db: DataSource }, async () => {});\n```\n\nZero dependencies, built on `fetch`.',
+    );
+    if (src === before) throw new Error("M8b setup: anchor sentence not found — content moved?");
+    fs.writeFileSync(f, src);
+
+    const cacheDir = freshCacheCopy();
+    const pkgRoot = findCachedPackageDir(cacheDir, "@ecosy/http");
+    fs.writeFileSync(path.join(pkgRoot, "dist", "tessellate.d.ts"), "export declare function tessellateThings(): void;\n");
+    const pjFile = path.join(pkgRoot, "package.json");
+    const pj = JSON.parse(fs.readFileSync(pjFile, "utf8"));
+    pj.exports["./tessellate"] = { types: "./dist/tessellate.d.ts", import: "./dist/tessellate.d.ts", require: "./dist/tessellate.d.ts" };
+    fs.writeFileSync(pjFile, JSON.stringify(pj, null, 2));
+    return { args: ["--content-dir", contentDir, "--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
+  },
+});
+
+// M9 — POSITIVE CONTROL, and the only case here that fails by going RED.
+// Tightening a coverage rule is easy to "prove" with nothing but cases that
+// turn red; that only shows the guard barks. This one adds an entry point
+// that IS genuinely documented — a real `import … from "@ecosy/http/parcel"`
+// in a fenced block, the way every documented entry on this site is written —
+// and requires that the guard does NOT flag it.
+//
+// A silent pass would be worthless on its own ("no finding" and "never
+// looked" print identically), so the control also requires
+// entryPointsChecked to have RISEN above the baseline: the guard has to have
+// examined the new entry and cleared it, not skipped it.
+cases.push({
+  name: "M9 CONTROL: a genuinely documented new subpath must NOT be flagged",
+  control: true,
+  expectKind: "MISSING-ENTRYPOINT",
+  expectPage: "parcel",
+  requireCount: "entryPointsChecked",
+  setup() {
+    const contentDir = freshContentCopy();
+    const f = path.join(contentDir, "http", "index.md");
+    let src = fs.readFileSync(f, "utf8");
+    const before = src;
+    src = src.replace(
+      "Zero dependencies, built on `fetch`.",
+      '```ts\nimport { openParcel } from "@ecosy/http/parcel";\n```\n\nZero dependencies, built on `fetch`.',
+    );
+    if (src === before) throw new Error("M9 setup: anchor sentence not found — content moved?");
+    fs.writeFileSync(f, src);
+
+    const cacheDir = freshCacheCopy();
+    const pkgRoot = findCachedPackageDir(cacheDir, "@ecosy/http");
+    fs.writeFileSync(path.join(pkgRoot, "dist", "parcel.d.ts"), "export declare function openParcel(): void;\n");
+    const pjFile = path.join(pkgRoot, "package.json");
+    const pj = JSON.parse(fs.readFileSync(pjFile, "utf8"));
+    pj.exports["./parcel"] = { types: "./dist/parcel.d.ts", import: "./dist/parcel.d.ts", require: "./dist/parcel.d.ts" };
+    fs.writeFileSync(pjFile, JSON.stringify(pj, null, 2));
+    return { args: ["--content-dir", contentDir, "--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
+  },
+});
+
+// M10 — the OTHER half of "so chuỗi tên không phải là đo", in
+// guard/lib/dts.mjs: cross-package overlap used to be a name-set
+// intersection, which is blind to a rename. `@ecosy/schedule`'s `Hook` became
+// `@ecosy/core/schedule`'s `HookPort` and `Source` became `SourceClass`; the
+// intersection saw two names vanish and reported 38/52 as divergence while
+// core was in fact a superset.
+//
+// Reproduced with the boundary candidate that really exists on this commit:
+// `@ecosy/store`'s `./react` entry vs the `@ecosy/react` package (slug
+// collision, zero shared names today). The mutation gives @ecosy/react a
+// declaration that is `ConnectStoreResult` under a `…Port` name and the
+// identical seven members. Pre-fix guard: SURVIVED — zero name intersection,
+// no boundary finding, the rename invisible. Post-fix the pair is named in
+// the output, which is what "phải lộ ra" means here.
+cases.push({
+  name: "M10 dts overlap: a RENAMED counterpart (X -> XPort) must be surfaced, not read as divergence",
+  expectKind: "ENTRYPOINT-OVERLAPS-PACKAGE",
+  // The rename pair itself — the one string only this mutation can produce.
+  expectPage: "ConnectStoreResult->ConnectStoreResultPort",
+  setup() {
+    const cacheDir = freshCacheCopy();
+    const reactRoot = findCachedPackageDir(cacheDir, "@ecosy/react");
+    const dts = path.join(reactRoot, "dist", "index.d.ts");
+    const members = ["store", "dispatch", "getState", "hydrate", "useSelector", "useDispatch", "createSelector"];
+    fs.appendFileSync(
+      dts,
+      "\nexport interface ConnectStoreResultPort {\n" + members.map((m) => `    ${m}: unknown;`).join("\n") + "\n}\n",
+    );
+    return { args: ["--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
+  },
+});
+
+// M10b — the OTHER half of the rename bug, and the half that lies in the
+// DANGEROUS direction: one coincidentally shared NAME used to be enough for
+// the guard to declare an entry point "documented under the other package's
+// page" and `continue` past MISSING-ENTRYPOINT entirely.
+//
+// Measured on the pre-fix guard: giving @ecosy/react an `interface
+// ThemeState` with two unrelated members makes it emit
+// `ENTRYPOINT-OVERLAPS-PACKAGE … "pkg":"@ecosy/styled","entry":"react"
+// "overlap":1` — @ecosy/styled's `./react` entry declared covered on the
+// strength of one string. The shapes have nothing in common.
+//
+// This is a control: it passes by that claim being ABSENT. Its sight-proof is
+// the companion rename finding in the same run — the comparison provably ran
+// against this very surface, so "no false match" cannot be "never looked".
+cases.push({
+  name: "M10b CONTROL: one coincidentally shared NAME must not be read as overlap",
+  control: true,
+  expectKind: "ENTRYPOINT-OVERLAPS-PACKAGE",
+  expectPage: '"pkg":"@ecosy/styled"',
+  requireFinding: { kind: "ENTRYPOINT-OVERLAPS-PACKAGE", page: "ConnectStoreResult->ConnectStoreResultPort" },
+  setup() {
+    const cacheDir = freshCacheCopy();
+    const reactRoot = findCachedPackageDir(cacheDir, "@ecosy/react");
+    const dts = path.join(reactRoot, "dist", "index.d.ts");
+    const members = ["store", "dispatch", "getState", "hydrate", "useSelector", "useDispatch", "createSelector"];
+    fs.appendFileSync(
+      dts,
+      // the rename (sight-proof, from @ecosy/store's ./react entry) …
+      "\nexport interface ConnectStoreResultPort {\n" +
+        members.map((m) => `    ${m}: unknown;`).join("\n") +
+        "\n}\n" +
+        // … and the name collision under test, from @ecosy/styled's ./react entry
+        "\nexport interface ThemeState {\n    somethingCompletelyUnrelated: string;\n    anotherUnrelatedThing: number;\n}\n",
+    );
+    return { args: ["--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
+  },
+});
+
 // M5 — llms.txt (an off-page copy) drops one real page from its own link
 // list, drifting from content/ without anything on an actual page changing.
 cases.push({
@@ -438,6 +659,39 @@ for (const c of cases) {
     rows.push({ name: c.name, outcome: `OBSERVED-${actual}`, actual, detail: "(widen — no fixed expectation)" });
     continue;
   }
+  if (c.control) {
+    // Inverted expectation: this case passes by the finding being ABSENT. But
+    // absence is only worth anything if the guard actually examined the thing
+    // — so the count this case names has to have gone UP against the
+    // baseline. Not-flagged plus not-looked is CONTROL-BLIND, which is a
+    // failure, not a pass.
+    const leaked = hasFinding(result.out, c.expectKind, c.expectPage);
+    let sighted;
+    let sightDetail;
+    if (c.requireCount) {
+      const now = countFromOutput(result.out, c.requireCount);
+      const base = countFromOutput(baseline.out, c.requireCount);
+      sighted = now !== null && base !== null && now > base;
+      sightDetail = `${c.requireCount} ${base}→${now}`;
+    } else {
+      // Sight-proof by companion finding: the same run must produce a
+      // finding that only the machinery under test can emit. Without it, "no
+      // false alarm" could just mean the comparison never ran.
+      sighted = hasFinding(result.out, c.requireFinding.kind, c.requireFinding.page);
+      sightDetail = `companion ${c.requireFinding.kind} \`${c.requireFinding.page}\` present: ${sighted}`;
+    }
+    let outcome;
+    if (!sighted) outcome = "CONTROL-BLIND";
+    else if (leaked) outcome = "CONTROL-FALSE-ALARM";
+    else outcome = "CAUGHT";
+    rows.push({
+      name: c.name,
+      outcome,
+      actual,
+      detail: `positive control — no ${c.expectKind} for \`${c.expectPage}\`, ${sightDetail}`,
+    });
+    continue;
+  }
   const kindSeen = hasFinding(result.out, c.expectKind, c.expectPage);
   const verdict = kindSeen ? "CAUGHT" : actual === "RED" ? "RED-BUT-WRONG-KIND" : "SURVIVED";
   rows.push({ name: c.name, outcome: verdict, actual, detail: c.expectKind });
@@ -448,7 +702,9 @@ for (const r of rows) console.log(`  [${r.outcome.padEnd(22)}] ${r.name}`);
 const caught = rows.filter((r) => r.outcome === "CAUGHT").length;
 const wanted = cases.filter((c) => c.expectKind).length;
 console.log(`\n${caught}/${wanted} required mutations caught with the expected finding kind.`);
-const survivors = rows.filter((r) => r.outcome === "SURVIVED" || r.outcome === "RED-BUT-WRONG-KIND" || r.outcome.startsWith("SKIP"));
+const survivors = rows.filter(
+  (r) => r.outcome === "SURVIVED" || r.outcome === "RED-BUT-WRONG-KIND" || r.outcome.startsWith("SKIP") || r.outcome.startsWith("CONTROL-"),
+);
 if (survivors.length) {
   console.log("Unhandled (printed, not hidden):");
   for (const s of survivors) console.log(`  - ${s.name}: ${s.outcome}${s.detail ? " — " + s.detail : ""}`);
