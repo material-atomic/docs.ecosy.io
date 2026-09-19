@@ -210,7 +210,7 @@ ctx.set("user", user);
 const user = ctx.get<User>("user");
 ```
 
-This is backed by the request-id memory that [`Proxy`](/next#proxy) maintains.
+This is backed by the request-id memory that [`Gateway`](/next#gateway) maintains.
 Without a proxied request id, `set` is a no-op and `get` returns `undefined` —
 so in a plain (non-proxied) app, pass values by closure instead.
 

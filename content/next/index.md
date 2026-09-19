@@ -34,7 +34,7 @@ export const GET = Route({ users: UserRepository }).get(async (ctx) => {
 | [`Bootstrap`](/next/bootstrap) | ordered startup, called from `instrumentation.ts` |
 | [`Inject`](/next/inject) | the injection primitive, on its own subpath |
 | [`Jwt`](/next/jwt) | bearer-token extraction, verification and signing |
-| [`Proxy`](#proxy) | middleware over every matched request |
+| [`Gateway`](#gateway) | middleware over every matched request |
 | [`Handler`](#handler) | a reusable handler with its own dependencies |
 | [`Cookie`](#cookie) | cookie access with safe defaults |
 | [`Res`](/next/route#responses) | response constructors |
@@ -44,7 +44,7 @@ export const GET = Route({ users: UserRepository }).get(async (ctx) => {
 Three entry points:
 
 ```ts
-import { Route, Bootstrap, Proxy } from "@ecosy/next";
+import { Route, Bootstrap, Gateway } from "@ecosy/next";
 import { Inject } from "@ecosy/next/inject";
 import { Jwt } from "@ecosy/next/jwt";
 ```
@@ -53,21 +53,21 @@ import { Jwt } from "@ecosy/next/jwt";
 an explicit choice, the second so `jsonwebtoken` is never pulled into an app
 that does not use it.
 
-## Proxy
+## Gateway
 
 ```ts
-Proxy(handler)              // → ProxyNextHandler
-Proxy(injects?)             // → callable builder
-Proxy.use(...middlewares)   // → callable builder
+Gateway(handler)              // → GatewayNextHandler
+Gateway(injects?)             // → callable builder
+Gateway.use(...middlewares)   // → callable builder
 ```
 
 Next middleware with the same injection as a route.
 
 ```ts
 // src/proxy.ts
-import { Proxy } from "@ecosy/next";
+import { Gateway } from "@ecosy/next";
 
-export const proxy = Proxy({ tokens: Tokens, jwt: Jwt }).use(bearer);
+export const proxy = Gateway({ tokens: Tokens, jwt: Jwt }).use(bearer);
 
 export const config = {
   matcher: ["/((?!_next/static|_next/image|.well-known|favicon.ico).*)"],
@@ -90,7 +90,7 @@ const bearer = async (ctx) => {
 };
 ```
 
-Importing `Proxy` anywhere marks the app as proxied. From then on, a route whose
+Importing `Gateway` anywhere marks the app as proxied. From then on, a route whose
 request lacks the `x-ecosyrequest-id` header **throws**:
 
 ```
