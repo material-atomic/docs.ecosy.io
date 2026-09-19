@@ -303,9 +303,24 @@ resolver behind `sx`.
 ## Subpath imports
 
 ```ts
-import { styled } from "@ecosy/styled/react/styled";
-import { styled } from "@ecosy/styled/react-native/styled";
+import { createStyled } from "@ecosy/styled/react/styled";           // web
+import { createStyled } from "@ecosy/styled/react-native/styled";    // mobile
 import { withThemeSlice } from "@ecosy/styled/slice";
 import slate from "@ecosy/styled/theme/slate";
-import type { ThemeConfigs } from "@ecosy/styled/types/theme";
+import type { ThemeConfigs } from "@ecosy/styled/react";
 ```
+
+`createStyled(store)` is a second, parallel implementation, not the factory
+`@ecosy/styled/react` and `@ecosy/styled/react-native` are built from — neither
+`index.mjs` imports it, or even mentions its module. It takes a custom
+`@ecosy/store` instance whose state nests the theme under a `theme` key
+(`Subscriber<{ theme: State }>`), and builds seven names (`useTheme`,
+`makeStyles`, `useSx`, `useThemeFactory`, `useStyled`, `styled`, `variants`)
+against it, for an app running more than one theme store side by side.
+`@ecosy/styled/react` and `@ecosy/styled/react-native` each keep their own
+store instead, with a flat state (`{ mode, themes }`, no `theme` key), define
+`styled`/`useTheme`/`makeStyles` directly against it, and export more than
+`createStyled` returns: `/react` adds `store`, `actions`, `useSelector`,
+`useThemeMode`, `useWindowWidth`, `hexToRgba` and `resolveSxValue` (14 names in
+total), and `/react-native` swaps those for its own React Native primitives
+(`View`, `Text`, `Image`, `AnimatedView`, …) instead.

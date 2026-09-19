@@ -403,6 +403,6 @@ point the content wants assembling somewhere, not gathering per request.
 import { markdoc, Plugin, Inject } from "@ecosy/markdoc";
 import { Layout, Cors } from "@ecosy/markdoc/plugins";
 import { Layout } from "@ecosy/markdoc/plugins/layout";
-import { AutoInvalidate } from "@ecosy/markdoc/imports";
+import { AutoInvalidate } from "@ecosy/markdoc/plugins/auto-invalidate";
 import { server } from "@ecosy/markdoc/nodejs";
 ```
