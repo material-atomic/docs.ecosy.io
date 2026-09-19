@@ -15,13 +15,27 @@
  * this site (the /mailer opening example, `yarn add @ecosy/mailer` — fine
  * here, but the class of bug 0055 lost was exactly this — and llms.txt's
  * broken `.md` promise). So every check below is tagged with which of the
- * four required regions (code / prose / bash / off-page) it covers, and the
- * self-check at the bottom asserts none of the four came back empty.
+ * four required regions (code / prose / bash / off-page) it covers.
+ *
+ * The zero-count self-check (`zeroFloors` in run()) covers code, prose and
+ * bash, plus the off-page URL count SPECIFICALLY WHEN off-page wasn't
+ * skipped. It deliberately does NOT claim to cover everything an extractor
+ * could go blind on: memberNamesOf() (the Foo.bar()/heading-member check)
+ * legitimately returns "unknown" for shapes a text scan can't read, and that
+ * rate is reported (`memberLookupCalls`/`memberLookupUnknown` in `counts`),
+ * not gated — a Reviewer measured 59% unknown before three real bugs in
+ * memberNamesOf() itself were fixed (see guard/lib/dts.mjs), and confirmed
+ * that number alone changes neither findings nor exit code either way. An
+ * off-page run that was skipped or only partially probed is a SEPARATE
+ * failure mode from an empty extractor — see `unverifiedRegions` below and
+ * `--skip-live-ok`.
  *
  * Usage:
  *   node guard/check.mjs                  # full run against content/, live off-page checks
  *   node guard/check.mjs --content-dir X  # run against a different content tree (mutation testing)
- *   node guard/check.mjs --skip-live      # skip the four network calls to docs.ecosy.io
+ *   node guard/check.mjs --skip-live      # skip off-page entirely — reports RED (unverified), not green
+ *   node guard/check.mjs --skip-live --skip-live-ok
+ *                                         # same, but acknowledged: off-page's absence won't force RED
  *   node guard/check.mjs --llms-txt FILE --llms-full FILE --search-json FILE --md-probe FILE
  *                                         # feed off-page checks from local fixtures instead of the network
  *   node guard/check.mjs --quiet          # summary line + exit code only
@@ -30,7 +44,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { loadContent, apiHeadings, inlineSpans } from "./lib/content.mjs";
-import { resolveTypes, namesOf, codeEntries, memberNamesOf, isFunctionDeclaration } from "./lib/dts.mjs";
+import { resolveTypes, namesOf, codeEntries, memberNamesOf, isFunctionDeclaration, memberLookupStats, resetMemberLookupStats } from "./lib/dts.mjs";
 import { resolvePackage } from "./lib/registry.mjs";
 
 const ROOT = path.join(import.meta.dirname, "..");
@@ -58,6 +72,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === "--content-dir") a.contentDir = path.resolve(argv[++i]);
     else if (arg === "--skip-live") a.skipLive = true;
+    else if (arg === "--skip-live-ok") a.skipLiveOk = true; // explicit "I know off-page wasn't verified this run"
     else if (arg === "--quiet") a.quiet = true;
     else if (arg === "--llms-txt") a.llmsTxtFile = argv[++i];
     else if (arg === "--llms-full") a.llmsFullFile = argv[++i];
@@ -213,7 +228,7 @@ function checkCodeImports(groups, surfaces) {
             continue;
           }
           const members = memberNamesOf(ref.pkgDir, ref.typesFile.replace(/^\.\//, ""), ref.exportName);
-          if (members && !members.has(member)) {
+          if (members !== null && !members.has(member)) {
             bad.push({ page: page.href, region: "code", kind: "MEMBER-NOT-FOUND", spec: ref.exportName, detail: member });
           }
         }
@@ -229,21 +244,31 @@ function checkCodeImports(groups, surfaces) {
 function checkBashInstalls(groups, surfaces, knownNpmNames) {
   const bad = [];
   let linesChecked = 0;
-  const INSTALL_RE = /(?:yarn add|npm (?:i|install)|pnpm add|bun add)\s+((?:-{1,2}\S+\s+)*)(\S+)/g;
+  // Only the command itself, NOT the package list: `yarn add a b c` installs
+  // THREE packages on one line, and a regex that captures a single `(\S+)`
+  // after it only ever sees the first. That was a real, reviewer-proven hole:
+  // `yarn add @ecosy/hoapp @ecosy/nextjs hono` survived because only
+  // `@ecosy/hoapp` (token one) was ever checked — the exact shape of the
+  // 0055 bug (`yarn add @ecosy/nextjs`), just one token later.
+  const INSTALL_CMD_RE = /(?:yarn add|npm (?:i|install)|pnpm add|bun add)\s+(.+)/g;
 
   for (const g of Object.values(groups))
     for (const page of g.pages)
       for (const block of page.bashBlocks)
-        for (const m of block.matchAll(INSTALL_RE)) {
-          const pkgToken = m[2];
-          if (!pkgToken.startsWith("@ecosy/") && pkgToken !== "page-flip") continue;
-          linesChecked++;
-          if (!knownNpmNames.has(pkgToken)) {
-            bad.push({ page: page.href, region: "bash", kind: "PACKAGE-NOT-FOUND", detail: pkgToken });
-            continue;
-          }
-          if (g.meta.npm && pkgToken !== g.meta.npm) {
-            bad.push({ page: page.href, region: "bash", kind: "MISMATCHED-INSTALL", detail: `${pkgToken} on the ${g.meta.npm} page` });
+        for (const m of block.matchAll(INSTALL_CMD_RE)) {
+          const rest = m[1].split(/\s+#/)[0]; // drop a trailing shell comment, if any
+          for (const token of rest.split(/\s+/)) {
+            if (!token || token.startsWith("-")) continue; // flag, not a package (-D, --save-dev, …)
+            const pkgToken = token.replace(/^(@[^/]+\/[^@\s]+|[^@\s]+)@.*$/, "$1"); // strip a version pin, keep scope intact
+            if (!pkgToken.startsWith("@ecosy/") && pkgToken !== "page-flip") continue;
+            linesChecked++;
+            if (!knownNpmNames.has(pkgToken)) {
+              bad.push({ page: page.href, region: "bash", kind: "PACKAGE-NOT-FOUND", detail: pkgToken });
+              continue;
+            }
+            if (g.meta.npm && pkgToken !== g.meta.npm) {
+              bad.push({ page: page.href, region: "bash", kind: "MISMATCHED-INSTALL", detail: `${pkgToken} on the ${g.meta.npm} page` });
+            }
           }
         }
 
@@ -259,14 +284,7 @@ function checkProse(groups, surfaces) {
   let headingsChecked = 0;
   let pseudoDeclsChecked = 0;
   let inlineSpansChecked = 0;
-
-  // Content legitimately cross-references another package's real API in prose
-  // (e.g. /store explaining that it reuses @ecosy/core's `Subscriber.wire`).
-  // The dotted-name prose check below is checked against this whole-site
-  // union, not just the current page's own package, specifically so that a
-  // true cross-reference never reads as a stale name on the wrong page.
-  const universe = new Set();
-  for (const s of Object.values(surfaces)) for (const n of s.allNames) universe.add(n);
+  let dottedProseChecked = 0;
 
   for (const g of Object.values(groups)) {
     const surface = surfaces[g.meta.npm];
@@ -297,7 +315,7 @@ function checkProse(groups, surfaces) {
               continue;
             }
             const members = memberNamesOf(surface.dir, info.typesFile.replace(/^\.\//, ""), h.base);
-            if (members && !members.has(h.member))
+            if (members !== null && !members.has(h.member))
               bad.push({ page: page.href, region: "prose", kind: "HEADING-MEMBER-NOT-FOUND", detail: h.raw.trim() });
           }
         }
@@ -342,21 +360,54 @@ function checkProse(groups, surfaces) {
       // undotted call like `save()` is skipped for the same reason bare headings are: it
       // reads as an instance method of some class introduced earlier on the page, which this
       // check has no reliable way to identify.
+      //
+      // This checks the MEMBER, not just the base's existence somewhere on the
+      // site. An earlier version stopped at "is `Foo` real anywhere" (renamed
+      // from PROSE-STALE-NAME, which promised more than that one line did) —
+      // reviewer-proven survivor: it could not catch a WRONG member on a REAL
+      // base, which is the actual shape a name goes stale in (heading-based
+      // checking already covers this for headings; running prose had nothing).
       for (const span of inlineSpans(page.prose)) {
         const m = span.match(/^([A-Z][A-Za-z0-9]*)\.([A-Za-z_$][\w$]*)(\(\))?$/);
         if (!m) continue;
-        const base = m[1];
+        const [, base, member] = m;
         if (BUILTIN_NAMESPACES.has(base)) continue;
-        if (universe.has(base)) continue; // real name somewhere on the site — nothing to say
-        const sentences = sentencesOf(page.prose);
-        const sentence = sentences.find((s) => s.includes("`" + span + "`"));
-        if (sentence && NEGATION.test(sentence)) continue; // deliberate, documented absence
-        bad.push({ page: page.href, region: "prose", kind: "PROSE-STALE-NAME", detail: span });
+        dottedProseChecked++;
+
+        const negatedHere = () => {
+          const sentence = sentencesOf(page.prose).find((s) => s.includes("`" + span + "`"));
+          return sentence && NEGATION.test(sentence);
+        };
+
+        // Prefer this page's own package for an owner (matches its
+        // frontmatter/heading conventions); fall back to whichever OTHER
+        // package on the site actually declares `base`, since prose
+        // legitimately cross-references another package's real class
+        // (e.g. /store citing @ecosy/core's `Subscriber`).
+        const ownerName = surface && surface.allNames.has(base) ? g.meta.npm : Object.keys(surfaces).find((n) => surfaces[n].allNames.has(base));
+        if (!ownerName) {
+          if (negatedHere()) continue;
+          bad.push({ page: page.href, region: "prose", kind: "PROSE-UNKNOWN-BASE", detail: span });
+          continue;
+        }
+        const ownerSurface = surfaces[ownerName];
+        const entryKey = findDeclaringEntry(ownerSurface, base, ownerName === g.meta.npm ? pageOwnEntry(g, page) : undefined);
+        const info = ownerSurface.entryNames[entryKey];
+        if (isFunctionDeclaration(ownerSurface.dir, info.typesFile.replace(/^\.\//, ""), base)) {
+          if (negatedHere()) continue;
+          bad.push({ page: page.href, region: "prose", kind: "PROSE-MEMBER-ON-FUNCTION", detail: span });
+          continue;
+        }
+        const members = memberNamesOf(ownerSurface.dir, info.typesFile.replace(/^\.\//, ""), base);
+        if (members !== null && !members.has(member)) {
+          if (negatedHere()) continue;
+          bad.push({ page: page.href, region: "prose", kind: "PROSE-MEMBER-NOT-FOUND", detail: span });
+        }
       }
     }
   }
 
-  return { bad, headingsChecked, pseudoDeclsChecked, inlineSpansChecked };
+  return { bad, headingsChecked, pseudoDeclsChecked, inlineSpansChecked, dottedProseChecked };
 }
 
 // ================================================================
@@ -376,11 +427,14 @@ function checkFamilyLinks(groups, surfaces) {
     const surface = surfaces[g.meta.npm];
     if (!surface) continue;
     for (const page of g.pages) {
-      // Table rows only — this is specifically the "Contents" style index of
-      // a package's own API, not every cross-link in running prose (which
+      // Table rows AND bullet-list items — this is specifically the
+      // "Contents" style index of a package's own API (which this site
+      // writes as either), not every cross-link in running prose (which
       // legitimately points elsewhere, e.g. /mailer linking to /logger).
+      // Reviewer proof this needed broadening: the identical mismatch in a
+      // bullet line survived when only `|` rows were checked.
       for (const line of page.prose.split("\n")) {
-        if (!line.trim().startsWith("|")) continue;
+        if (!/^\s*(\||[-*]\s)/.test(line)) continue;
         for (const m of line.matchAll(LINK_RE)) {
           const [, label, href] = m;
           if (!surface.allNames.has(label)) continue; // not claiming one of this package's own names
@@ -421,25 +475,41 @@ function checkEntryPoints(groups, surfaces) {
 
     for (const id of ids) {
       entriesChecked++;
+      const info = surface.entryNames[surface.entries.find((k) => k.replace(/^\.\//, "").replace(/\/\*$/, "") === id)];
+
+      // Candidate boundary: a content slug matching the entry's first path
+      // segment, with its OWN standalone npm package. This alone is a string
+      // coincidence, not a measurement — `@ecosy/styled`'s `./react` entry
+      // shares a slug with `@ecosy/react`'s docs page, but the two share ZERO
+      // names (an unrelated React integration, not the same functionality
+      // moved). Only an actual surface-name intersection with the OTHER
+      // package's own exports says "this is really the same API, taught
+      // twice" — the real case (@ecosy/core absorbing @ecosy/logger and
+      // @ecosy/schedule: 40/40 and 34/34 names in common).
       const firstSeg = id.split("/")[0];
       const otherPkg = npmBySlug[firstSeg];
-      if (otherPkg && otherPkg !== g.meta.npm) {
-        // e.g. @ecosy/core exports "./logger", and content/logger/ teaches the
-        // standalone @ecosy/logger package under its own name. Both are real,
-        // technically-correct packages today — this is a product decision
-        // (see task 0057 coordinator note), not a wrong-API bug, so it is
-        // reported separately from MISSING-ENTRYPOINT.
+      const otherSurface = otherPkg && otherPkg !== g.meta.npm ? surfaces[otherPkg] : null;
+      const overlap = otherSurface && info ? [...info.names].filter((n) => otherSurface.allNames.has(n)) : [];
+
+      if (otherSurface && overlap.length > 0) {
         boundary.push({
-          kind: "CORE-CONSOLIDATION-BOUNDARY",
+          kind: "ENTRYPOINT-OVERLAPS-PACKAGE",
           page: groups[firstSeg].pages[0].href,
           pkg: g.meta.npm,
           entry: id,
           taughtAsPackage: otherPkg,
+          overlap: overlap.length,
+          entrySurface: info.names.size,
+          otherSurface: otherSurface.allNames.size,
           pages: groups[firstSeg].pages.map((p) => p.href),
         });
-        continue;
+        continue; // real overlap confirmed — this id IS documented, just under the other package's page
       }
-      const info = surface.entryNames[surface.entries.find((k) => k.replace(/^\.\//, "").replace(/\/\*$/, "") === id)];
+      // No overlap (or no candidate at all): an ordinary entry point, judged
+      // on its own merits — falls through to the same missing-or-not check
+      // every other entry gets. A candidate that failed the overlap test
+      // must NOT `continue` here, or it silently escapes MISSING-ENTRYPOINT
+      // by virtue of sharing a slug with an unrelated package.
       const nameHit = info && [...info.names].some((n) => wordIn(fullText, n));
       const idHit = wordIn(fullText, id.split("/").pop());
       if (!nameHit && !idHit)
@@ -465,22 +535,57 @@ async function fetchText(pathOrUrl) {
   return { status: res.status, text: res.ok ? await res.text() : "" };
 }
 
+/**
+ * llms-full.txt is `# heading`, blank, `Source: <url>`, blank, body, blank,
+ * repeated per page. Extract path -> body by index, not by splitting on a
+ * heading pattern: a page's OWN body legitimately opens with `# Name` (every
+ * content/*.md does), so a naive "stop at the next `# `" would truncate a
+ * body down to nothing the moment it starts with its own title. Anchoring
+ * the strip to the END of each slice (the heading that belongs to the NEXT
+ * section) avoids that.
+ */
+function extractLlmsFullBodies(text) {
+  const marks = [...text.matchAll(/^Source: https:\/\/docs\.ecosy\.io(\/\S*)$/gm)].map((m) => ({
+    path: m[1],
+    end: m.index + m[0].length,
+  }));
+  const out = new Map();
+  for (let i = 0; i < marks.length; i++) {
+    const sliceEnd = i + 1 < marks.length ? findNextHeadingStart(text, marks[i].end, marks[i + 1].end) : text.length;
+    out.set(marks[i].path, text.slice(marks[i].end, sliceEnd).trim());
+  }
+  return out;
+}
+
+/** Position of the last blank-line-separated `# ` heading line before the next Source marker — i.e. where THIS body ends. */
+function findNextHeadingStart(text, from, nextSourceEnd) {
+  const nextSourceLineStart = text.lastIndexOf("\nSource: ", nextSourceEnd);
+  const headingMatch = /\n(#[^\n]*)\n+$/.exec(text.slice(from, nextSourceLineStart));
+  return headingMatch ? from + headingMatch.index : nextSourceLineStart;
+}
+
 async function checkOffPage(groups, opts) {
   const bad = [];
   let urlsChecked = 0;
   const canon = canonicalPaths(groups);
-  const pagePaths = [...groups && Object.values(groups).flatMap((g) => g.pages.map((p) => p.href))];
+  const pagePaths = Object.values(groups).flatMap((g) => g.pages.map((p) => p.href));
+  const localBodyByPath = new Map();
+  for (const g of Object.values(groups)) for (const p of g.pages) localBodyByPath.set(p.href, p.body.trim());
 
-  let llmsTxt, llmsFull, searchJson;
+  // `skipped` and `verified` are both consumed by run(): a run that never
+  // looked at the live/fixture off-page copies at all (skipped) must not
+  // report GREEN, and neither should one where the .md-promise probe only
+  // partially ran (verified: false) — see run()'s handling of `--skip-live`.
   if (opts.skipLive && !opts.llmsTxtFile) {
-    return { bad: [], urlsChecked: 0, skipped: true };
+    return { bad: [], urlsChecked: 0, skipped: true, verified: false };
   }
+  let llmsTxt, llmsFull, searchJson;
   try {
     llmsTxt = opts.llmsTxtFile ? { status: 200, text: fs.readFileSync(opts.llmsTxtFile, "utf8") } : await fetchText("/llms.txt");
     llmsFull = opts.llmsFullFile ? { status: 200, text: fs.readFileSync(opts.llmsFullFile, "utf8") } : await fetchText("/llms-full.txt");
     searchJson = opts.searchJsonFile ? { status: 200, text: fs.readFileSync(opts.searchJsonFile, "utf8") } : await fetchText("/search.json");
   } catch (e) {
-    return { bad: [{ region: "offpage", kind: "FETCH-FAILED", detail: String(e) }], urlsChecked: 0, skipped: false };
+    return { bad: [{ region: "offpage", kind: "FETCH-FAILED", detail: String(e) }], urlsChecked: 0, skipped: false, verified: false };
   }
 
   // 1) URL allowlist: every docs.ecosy.io/* URL anywhere in llms.txt/llms-full.txt must be a real path.
@@ -494,34 +599,52 @@ async function checkOffPage(groups, opts) {
     }
   }
 
-  // 2) the .md promise: if llms.txt claims per-page markdown, every real page's `.md` must actually work.
-  if (/\.md`?\s*(appended|suffix)/i.test(llmsTxt.text) || /with `\.md` appended/i.test(llmsTxt.text)) {
-    let probe = {};
-    if (opts.mdProbeFile) probe = JSON.parse(fs.readFileSync(opts.mdProbeFile, "utf8"));
-    const failures = [];
-    for (const href of pagePaths) {
-      let status;
-      if (probe[href] !== undefined) status = probe[href];
-      else if (opts.skipLive) continue;
-      else status = (await fetch(ORIGIN + href + ".md")).status;
-      urlsChecked++;
-      if (status !== 200) failures.push(href + ".md");
-    }
-    if (failures.length)
-      bad.push({ region: "offpage", kind: "MD-PROMISE-BROKEN", detail: `${failures.length}/${pagePaths.length} failed, e.g. ${failures[0]}` });
+  // 2) the .md promise, probed on all 32 real paths UNCONDITIONALLY. The
+  // previous version only ran this when llms.txt's WORDING matched a regex
+  // ("appended"/"suffix") — a guard must not read its own pass/fail
+  // criterion from the very file it grades. Reviewer proof: rewording the
+  // promise sentence (still true, still promising `.md`, exactly the edit
+  // B2 is scoped to make at lib/content.mjs:285) made `urlsChecked` drop
+  // 98→66, the finding vanish, and the run print "0 empty extractors" —
+  // green, on a site still serving every `.md` as a 404.
+  let probe = {};
+  if (opts.mdProbeFile) probe = JSON.parse(fs.readFileSync(opts.mdProbeFile, "utf8"));
+  const failures = [];
+  let mdProbeSkipped = 0;
+  for (const href of pagePaths) {
+    let status;
+    if (probe[href] !== undefined) status = probe[href];
+    else if (opts.skipLive) {
+      mdProbeSkipped++;
+      continue;
+    } else status = (await fetch(ORIGIN + href + ".md")).status;
+    urlsChecked++;
+    if (status !== 200) failures.push(href + ".md");
   }
+  if (failures.length)
+    bad.push({ region: "offpage", kind: "MD-PROMISE-BROKEN", detail: `${failures.length}/${pagePaths.length} failed, e.g. ${failures[0]}` });
 
-  // 3) three-copy drift: llms.txt's own link list, search.json's path list, and llms-full.txt's Source: lines
-  //    must each cover exactly the canonical 32 content pages — no more, no less.
+  // 3) three-copy PATH-LIST drift — renamed *-PATHLIST because that's the
+  // limit of what this compares: whether each copy lists the same 32 paths,
+  // BOTH missing (content/ has a page a copy doesn't list) and phantom (a
+  // copy lists a page content/ doesn't have — search.json growing a page
+  // nobody wrote is exactly as silent a drift as one going missing). Body
+  // TEXT drift is (4), below — a separate, more expensive comparison.
   const llmsTxtHrefs = new Set([...llmsTxt.text.matchAll(/\]\(https:\/\/docs\.ecosy\.io(\/[^)]*)\)/g)].map((m) => m[1]));
   const missingFromLlmsTxt = pagePaths.filter((p) => !llmsTxtHrefs.has(p));
+  const phantomInLlmsTxt = [...llmsTxtHrefs].filter((p) => !canon.has(p));
   if (missingFromLlmsTxt.length)
-    bad.push({ region: "offpage", kind: "DRIFT-LLMSTXT", detail: `missing ${missingFromLlmsTxt.length}, e.g. ${missingFromLlmsTxt[0]}` });
+    bad.push({ region: "offpage", kind: "DRIFT-LLMSTXT-PATHLIST", detail: `missing ${missingFromLlmsTxt.length}, e.g. ${missingFromLlmsTxt[0]}` });
+  if (phantomInLlmsTxt.length)
+    bad.push({ region: "offpage", kind: "DRIFT-LLMSTXT-PATHLIST", detail: `phantom ${phantomInLlmsTxt.length}, e.g. ${phantomInLlmsTxt[0]}` });
 
   const fullSourcePaths = new Set([...llmsFull.text.matchAll(/^Source: https:\/\/docs\.ecosy\.io(\/\S*)$/gm)].map((m) => m[1]));
   const missingFromFull = pagePaths.filter((p) => !fullSourcePaths.has(p));
+  const phantomInFull = [...fullSourcePaths].filter((p) => !canon.has(p));
   if (missingFromFull.length)
-    bad.push({ region: "offpage", kind: "DRIFT-LLMSFULL", detail: `missing ${missingFromFull.length}, e.g. ${missingFromFull[0]}` });
+    bad.push({ region: "offpage", kind: "DRIFT-LLMSFULL-PATHLIST", detail: `missing ${missingFromFull.length}, e.g. ${missingFromFull[0]}` });
+  if (phantomInFull.length)
+    bad.push({ region: "offpage", kind: "DRIFT-LLMSFULL-PATHLIST", detail: `phantom ${phantomInFull.length}, e.g. ${phantomInFull[0]}` });
 
   let searchPaths = new Set();
   try {
@@ -531,10 +654,35 @@ async function checkOffPage(groups, opts) {
     bad.push({ region: "offpage", kind: "SEARCH-JSON-UNPARSEABLE", detail: "" });
   }
   const missingFromSearch = pagePaths.filter((p) => !searchPaths.has(p));
+  const phantomInSearch = [...searchPaths].filter((p) => !canon.has(p));
   if (missingFromSearch.length)
-    bad.push({ region: "offpage", kind: "DRIFT-SEARCHJSON", detail: `missing ${missingFromSearch.length}, e.g. ${missingFromSearch[0]}` });
+    bad.push({ region: "offpage", kind: "DRIFT-SEARCHJSON-PATHLIST", detail: `missing ${missingFromSearch.length}, e.g. ${missingFromSearch[0]}` });
+  if (phantomInSearch.length)
+    bad.push({ region: "offpage", kind: "DRIFT-SEARCHJSON-PATHLIST", detail: `phantom ${phantomInSearch.length}, e.g. ${phantomInSearch[0]}` });
 
-  return { bad, urlsChecked, skipped: false };
+  // 4) BODY drift: llms-full.txt's per-page TEXT against the actual local
+  // content/*.md body for that page. (3) only asks "is this page listed" and
+  // stays green if content/ is edited without a redeploy — the live copy
+  // still lists every path, just with stale text underneath, which is
+  // exactly what the agent audience of llms-full.txt would read. Comparing
+  // against LOCAL content/ (not a second live fetch of the HTML) is
+  // deliberate: it's what "content/ says right now" actually means, and it's
+  // the only side of this comparison a pre-deploy CI run could ever see.
+  const liveBodyByPath = extractLlmsFullBodies(llmsFull.text);
+  const bodyDrift = [];
+  for (const href of pagePaths) {
+    const live = liveBodyByPath.get(href);
+    if (live === undefined) continue; // already reported as missingFromFull above
+    if (live !== localBodyByPath.get(href)) bodyDrift.push(href);
+  }
+  if (bodyDrift.length)
+    bad.push({
+      region: "offpage",
+      kind: "DRIFT-LLMSFULL-BODY",
+      detail: `${bodyDrift.length} page(s) where live llms-full.txt text != content/, e.g. ${bodyDrift[0]}`,
+    });
+
+  return { bad, urlsChecked, skipped: false, verified: mdProbeSkipped === 0 };
 }
 
 // ================================================================
@@ -542,6 +690,7 @@ async function checkOffPage(groups, opts) {
 // ================================================================
 
 export async function run(opts) {
+  resetMemberLookupStats();
   const groups = loadContent(opts.contentDir);
   const pageCount = Object.values(groups).reduce((n, g) => n + g.pages.length, 0);
 
@@ -574,22 +723,57 @@ export async function run(opts) {
     headingsChecked: C.headingsChecked,
     pseudoDeclsChecked: C.pseudoDeclsChecked,
     inlineSpansChecked: C.inlineSpansChecked,
+    dottedProseChecked: C.dottedProseChecked,
     entryPointsChecked: D.entriesChecked,
     urlsChecked: E.urlsChecked,
     familyLinksChecked: F.linksChecked,
+    // Visibility, not a pass/fail floor: how often memberNamesOf() (the
+    // Foo.bar()/heading-member check) genuinely could not determine an
+    // answer — a class/interface/const declaration it couldn't resolve at
+    // all, or an intersection type mixing an external reference with a
+    // local literal (see guard/lib/dts.mjs). This used to be invisible: a
+    // memberNamesOf() that always answered "unknown" changed no count, no
+    // finding, no exit code. It's printed unconditionally so that rate is
+    // never silent, even though a reasonably high rate is expected (not
+    // every declaration in these packages is a simple inline object/class).
+    memberLookupCalls: memberLookupStats.total,
+    memberLookupUnknown: memberLookupStats.unknown,
   };
   const zeroFloors = {
     pagesScanned: 32,
     packagesResolved: 16, // 16 @ecosy/* + page-flip is allowed to sit outside this floor
     specifiersChecked: 1,
     namedImportsChecked: 1,
+    memberCallsChecked: 1,
     bashLinesChecked: 1,
     headingsChecked: 1,
     pseudoDeclsChecked: 1,
+    inlineSpansChecked: 1,
+    dottedProseChecked: 1,
     entryPointsChecked: 1,
     familyLinksChecked: 1,
   };
+  // urlsChecked is legitimately 0 when off-page was deliberately skipped
+  // (--skip-live, nothing fetched at all) — it does NOT belong in the same
+  // floor list as the other three regions, which have no such legitimate-0
+  // state. Its absence from zeroFloors previously meant a fully blind
+  // off-page region (network down, a bug zeroing the loop, anything) looked
+  // IDENTICAL in `counts`/exit-code to an intentional --skip-live: both said
+  // "0 empty extractors". Enforcing it only when off-page wasn't skipped
+  // closes that without breaking the legitimate skip path.
+  if (!E.skipped) zeroFloors.urlsChecked = 1;
   const emptyExtractors = Object.entries(zeroFloors).filter(([k, floor]) => counts[k] < floor);
+
+  // Off-page being skipped (or only PARTIALLY probed — some .md paths had no
+  // live fetch and no fixture) is a second, separate way to be wrongly
+  // green, and `emptyExtractors` above doesn't cover it: `urlsChecked` can
+  // be legitimately nonzero (the URL-allowlist half ran off a fixture) while
+  // the .md-promise probe never completed. A run in that state must not
+  // report GREEN silently — it has to be told to, via `--skip-live-ok`,
+  // which is a statement "I know this run didn't verify off-page" rather
+  // than the guard just not noticing.
+  const offPageUnverified = E.skipped || !E.verified;
+  const unverifiedRegions = offPageUnverified && !opts.skipLiveOk ? ["offpage"] : [];
 
   return {
     groups,
@@ -597,6 +781,8 @@ export async function run(opts) {
     timings,
     counts,
     emptyExtractors,
+    unverifiedRegions,
+    offPageStatus: { skipped: E.skipped, verified: E.verified },
     boundary: D.boundary,
     findings: {
       codeImports: A.bad,
@@ -607,7 +793,7 @@ export async function run(opts) {
       familyLinks: F.bad,
     },
     allBad,
-    ok: allBad.length === 0 && emptyExtractors.length === 0,
+    ok: allBad.length === 0 && emptyExtractors.length === 0 && unverifiedRegions.length === 0,
   };
 }
 
@@ -622,6 +808,12 @@ async function main() {
     console.log("counts:", JSON.stringify(result.counts));
     if (result.emptyExtractors.length)
       console.log("EMPTY EXTRACTOR (treated as RED):", result.emptyExtractors.map(([k]) => k).join(", "));
+    if (result.unverifiedRegions.length)
+      console.log(
+        "UNVERIFIED (treated as RED — pass --skip-live-ok to acknowledge):",
+        result.unverifiedRegions.join(", "),
+        JSON.stringify(result.offPageStatus),
+      );
     for (const [region, list] of Object.entries(result.findings)) {
       if (!list.length) continue;
       console.log(`\n-- ${region} (${list.length}) --`);
@@ -633,7 +825,10 @@ async function main() {
     }
   }
   fs.writeFileSync(path.join(ROOT, "guard", "last-run.json"), JSON.stringify(result, (k, v) => (v instanceof Set ? [...v] : v), 1));
-  console.log(result.ok ? "GREEN" : "RED", `(${result.allBad.length} findings, ${result.emptyExtractors.length} empty extractors)`);
+  console.log(
+    result.ok ? "GREEN" : "RED",
+    `(${result.allBad.length} findings, ${result.emptyExtractors.length} empty extractors, ${result.unverifiedRegions.length} unverified regions)`,
+  );
   process.exit(result.ok ? 0 : 1);
 }
 

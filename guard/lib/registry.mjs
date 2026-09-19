@@ -25,8 +25,19 @@ import { execFileSync } from "node:child_process";
 // without ever touching the real cache other runs share.
 const CACHE_DIR = process.env.GUARD_CACHE_DIR || path.join(import.meta.dirname, "..", ".cache");
 
-function slug(name) {
-  return "pkg-" + name;
+// Keyed by name@version, NOT name alone. An earlier version of this cache
+// keyed on the package name only, so `ensureTarball()`'s existence check hit
+// on ANY previously-cached tarball regardless of whether it was still
+// `latest` — a version bump on npm would silently keep being ignored until
+// someone thought to delete guard/.cache by hand. (Reviewer's proof this was
+// real: M4's mutation test only worked BECAUSE the cache wasn't being
+// refreshed — mutating a cached package.json copy would be pointless if
+// resolvePackage() re-fetched a fresh tarball over it every run.) Keying on
+// the version means a real `latest` bump gets a fresh `npm pack`
+// automatically, while repeat runs against an unchanged `latest` still hit
+// the cache.
+function slug(name, version) {
+  return "pkg-" + name.replace(/^@/, "").replace(/\//g, "-") + "@" + version;
 }
 
 /** Full packument, not the abbreviated one `npm view` hands back. */
@@ -36,9 +47,9 @@ export async function fetchPackument(name) {
   return res.json();
 }
 
-/** Download+extract `latest` into the cache dir if not already there. Returns the package dir. */
+/** Download+extract `name@version` into the cache dir if not already there. Returns the package dir. */
 export function ensureTarball(name, version) {
-  const dir = path.join(CACHE_DIR, slug(name));
+  const dir = path.join(CACHE_DIR, slug(name, version));
   const pkgDir = path.join(dir, "package");
   if (fs.existsSync(pkgDir)) return pkgDir;
   fs.mkdirSync(dir, { recursive: true });

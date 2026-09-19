@@ -7,6 +7,8 @@ next-env.d.ts
 .wrangler/
 
 # guard: downloaded npm tarballs + extracted packages, and per-run reports.
-# Re-downloaded by guard/check.mjs on every run — not source, not committed.
+# Keyed by name@version (lib/registry.mjs) — re-fetched only when a
+# package's published `latest` changes, reused across runs otherwise. Not
+# source, not committed.
 /guard/.cache/
 /guard/last-run.json

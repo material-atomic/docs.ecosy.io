@@ -109,20 +109,58 @@ export function codeEntries(pkgDir) {
 }
 
 /**
- * Members declared textually inside a class/interface/const-object block, or
- * `null` when the name isn't a class/interface/const (a plain `function` or
- * `type` alias has no members in this sense — a `.member` reference on one of
- * those is never valid, which is exactly the /mailer shape: `Mailer` became a
- * function, so `Mailer.from` has nothing to resolve against).
+ * How often memberNamesOf() could and couldn't tell — reset per guard run by
+ * check.mjs, read back into the report. This exists because the return value
+ * alone hid the rate: making memberNamesOf() answer "unknown" on every call
+ * changed neither the finding count nor the exit code on a real run (81/138
+ * calls, 59%, were already "unknown" the day this was measured) — a blind
+ * checker and a working one looked identical. See the CALLED-BUT-UNKNOWN
+ * count in check.mjs's report.
+ */
+export const memberLookupStats = { total: 0, unknown: 0 };
+
+export function resetMemberLookupStats() {
+  memberLookupStats.total = 0;
+  memberLookupStats.unknown = 0;
+}
+
+/**
+ * Members declared textually inside a class/interface/const/type-alias
+ * block. Returns:
+ *   - a `Set` (possibly EMPTY) when the shape was fully read — an empty Set
+ *     is a real assertion ("this has zero members", e.g. `type X = string`),
+ *     and a `.member` access against it is wrong, same as against a Set that
+ *     has members but not this one.
+ *   - `null` when the shape could not be determined at all (declaration not
+ *     found even after chasing re-exports, or a shape this text scan can't
+ *     read — e.g. `const x: A & B` mixing an external class reference with a
+ *     local object literal). `null` must never be treated as "no members" —
+ *     that conflation is exactly what let the /orm and /schedule members
+ *     briefly read as missing after an earlier version of this function's
+ *     bugs (see the two comments below) before they were found and fixed.
+ *
+ * A plain `function` has no member namespace at all — checked separately by
+ * isFunctionDeclaration(), not here, since a function isn't matched by
+ * memberNamesOf()'s own class/interface/const/type declRe and would
+ * otherwise fall into the same "unknown" bucket as a shape this scan just
+ * can't read, losing the distinction between "definitely wrong" (a function
+ * has no `.member`) and "can't tell".
  *
  * This is a brace-depth scan, not a real TS parser — good enough to name
  * top-level members of a declaration block without pulling in a type checker.
  */
-export function memberNamesOf(pkgDir, rel, name, seen = new Set()) {
+export function memberNamesOf(pkgDir, rel, name) {
+  memberLookupStats.total++;
+  const result = memberNamesOfInner(pkgDir, rel, name, new Set());
+  if (result === null) memberLookupStats.unknown++;
+  return result;
+}
+
+function memberNamesOfInner(pkgDir, rel, name, seen) {
   const found = resolveFile(pkgDir, rel);
-  if (!found) return undefined;
+  if (!found) return null;
   const key = found.f + "#" + name;
-  if (seen.has(key)) return undefined;
+  if (seen.has(key)) return null;
   seen.add(key);
   const src = fs.readFileSync(found.f, "utf8");
 
@@ -142,13 +180,13 @@ export function memberNamesOf(pkgDir, rel, name, seen = new Set()) {
     for (const rm of src.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["'](\.[^"']*)["']/g)) {
       const names = rm[1].split(",").map((s) => s.trim().replace(/^type\s+/, "").split(/\s+as\s+/));
       if (names.some(([orig, alias]) => (alias || orig) === name))
-        return memberNamesOf(pkgDir, path.join(path.dirname(found.rel), rm[2]), names.find(([orig, alias]) => (alias || orig) === name)[0], seen);
+        return memberNamesOfInner(pkgDir, path.join(path.dirname(found.rel), rm[2]), names.find(([orig, alias]) => (alias || orig) === name)[0], seen);
     }
     for (const rm of src.matchAll(/export\s+(?:type\s+)?\*\s+from\s+["'](\.[^"']*)["']/g)) {
-      const r = memberNamesOf(pkgDir, path.join(path.dirname(found.rel), rm[1]), name, seen);
-      if (r) return r;
+      const r = memberNamesOfInner(pkgDir, path.join(path.dirname(found.rel), rm[1]), name, seen);
+      if (r !== null) return r;
     }
-    return undefined; // couldn't find the declaration at all
+    return null; // couldn't find the declaration at all — unknown, not "no members"
   }
   // `export declare const Json: SerializeJSON;` — a const typed by reference
   // to a separately-declared interface, not an inline object literal. There
@@ -163,15 +201,15 @@ export function memberNamesOf(pkgDir, rel, name, seen = new Set()) {
     const window = stop === -1 ? src.slice(m.index + m[0].length) : src.slice(m.index + m[0].length, stop);
     if (!window.includes("{")) {
       const aliasMatch = window.match(/^\s*:\s*([A-Za-z_$][\w$]*)\s*$/);
-      if (!aliasMatch) return undefined;
+      if (!aliasMatch) return null;
       const aliasName = aliasMatch[1];
       const localDecl = new RegExp("export\\s+(?:declare\\s+)?(?:interface|type)\\s+" + aliasName + "\\b").exec(src);
-      if (localDecl) return memberNamesOf(pkgDir, found.rel, aliasName, seen);
+      if (localDecl) return memberNamesOfInner(pkgDir, found.rel, aliasName, seen);
       const importMatch = src.match(
         new RegExp("import\\s+(?:type\\s+)?\\{[^}]*\\b" + aliasName + "\\b[^}]*\\}\\s*from\\s*[\"'](\\.[^\"']*)[\"']"),
       );
-      if (importMatch) return memberNamesOf(pkgDir, path.join(path.dirname(found.rel), importMatch[1]), aliasName, seen);
-      return undefined;
+      if (importMatch) return memberNamesOfInner(pkgDir, path.join(path.dirname(found.rel), importMatch[1]), aliasName, seen);
+      return null;
     }
   }
 
@@ -184,7 +222,7 @@ export function memberNamesOf(pkgDir, rel, name, seen = new Set()) {
     // it sits.
     const eq = src.indexOf("=", m.index + m[0].length);
     j = eq === -1 ? src.length : src.indexOf("{", eq);
-    if (j === -1) return undefined; // a union/primitive alias — genuinely no members
+    if (j === -1) return new Set(); // a union/primitive alias — REAL assertion: genuinely no members
   } else {
     // class/interface/const: scan forward from the name past any generic
     // parameter list / extends / implements clause to find the REAL opening
@@ -205,10 +243,10 @@ export function memberNamesOf(pkgDir, rel, name, seen = new Set()) {
     // are real but invisible from here, and reporting the local half alone
     // as the complete member set would flag every one of them as missing.
     // Honest answer: this shape can't be verified with a text scan, so say
-    // so (return undefined = "unknown", not "not found") rather than
+    // so (return null = "unknown", not "not found") rather than
     // pretend to a completeness this parser doesn't have.
     if (/[&|]\s*$/.test(src.slice(m.index + m[0].length, j)) || /\bimport\s*\(/.test(src.slice(m.index + m[0].length, j)))
-      return undefined;
+      return null;
   }
   let depth = 1;
   let i = j + 1;
