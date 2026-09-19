@@ -45,7 +45,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { loadContent } from "./lib/content.mjs";
+import { loadContent, longestProseLine, markdownInlineToPlain, hrefToHtmlPath, hrefToMdPath } from "./lib/content.mjs";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const REAL_CONTENT = path.join(ROOT, "content");
@@ -135,8 +135,23 @@ function offPageArgs(files) {
 }
 
 function runGuard(args, env = {}) {
+  return runGuardWithBin(CHECK_BIN, args, env);
+}
+
+function runGuardWithBin(bin, args, env = {}) {
   try {
-    const out = execFileSync("node", [CHECK_BIN, ...args], {
+    // realpathSync matters specifically for a check.mjs copied under
+    // os.tmpdir() (buildWeakenedCheck, below): on macOS /tmp and
+    // /var/folders/... are symlinks into /private/..., and Node resolves
+    // import.meta.url through the REAL path while process.argv[1] keeps
+    // whatever path was typed on the command line. check.mjs's own
+    // `if (import.meta.url === \`file://${process.argv[1]}\`) main();`
+    // idiom then compares unequal paths for the exact same file, so
+    // `main()` silently never runs — the process exits 0 having printed
+    // nothing, which looks EXACTLY like "the mutation was invisible" and
+    // is actually "the harness never executed". Measured while building
+    // H1/H2: every case falsely reported GREEN until this line was added.
+    const out = execFileSync("node", [fs.realpathSync(bin), ...args], {
       encoding: "utf8",
       env: { ...process.env, ...env },
     });
@@ -144,6 +159,82 @@ function runGuard(args, env = {}) {
   } catch (e) {
     return { code: e.status ?? 1, out: (e.stdout || "") + (e.stderr || "") };
   }
+}
+
+/**
+ * Builds a dist/client-SHAPED directory from a content dir — the fixture
+ * task 0063's N1–N7/C1/C2 cases mutate, and the fixture every OTHER case
+ * (M1…M10, which mutate content/ or package.json, not dist/) needs a CLEAN
+ * copy of, or check.mjs's new dist region would compare a MUTATED
+ * content/'s pages against the real project's real dist/client (built from
+ * the UNMUTATED content) and report spurious drift that has nothing to do
+ * with what that case is actually testing.
+ *
+ * Matches the exact contracts check.mjs's checkDist() verifies, not a looser
+ * approximation of them:
+ *   - <href>.html contains that page's own identity fragment (see
+ *     guard/lib/content.mjs's longestProseLine/markdownInlineToPlain) and
+ *     nothing else's — own:true, leak:0 for every page, by construction;
+ *   - <href>.md is byte-for-byte the shape scripts/emit-markdown.mjs
+ *     promises: "Source: <origin><href>", blank line, the body with
+ *     frontmatter stripped;
+ *   - the four catalog pages + 404.html exist (content-free — G4 only
+ *     examines content/ pages, and G1 just needs a non-empty file);
+ *   - the three off-page files, via the EXISTING synthesizeOffPage() rather
+ *     than a second, drifting reimplementation.
+ */
+function synthesizeDist(contentDir) {
+  const groups = loadContent(contentDir);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "docs-guard-dist-"));
+  const pages = Object.values(groups).flatMap((g) => g.pages);
+
+  for (const page of pages) {
+    const htmlRel = hrefToHtmlPath(page.href);
+    const mdRel = hrefToMdPath(page.href);
+    fs.mkdirSync(path.dirname(path.join(dir, htmlRel)), { recursive: true });
+    const raw = longestProseLine(page.body);
+    const fragment = raw ? markdownInlineToPlain(raw) : `(no qualifying prose line for ${page.href})`;
+    fs.writeFileSync(
+      path.join(dir, htmlRel),
+      `<html><body><nav>synthetic nav shared by every page — deliberately carries no page's own fragment</nav><p>${fragment}</p></body></html>`,
+    );
+    fs.writeFileSync(path.join(dir, mdRel), `Source: https://docs.ecosy.io${page.href}\n\n${page.body.trim()}\n`);
+  }
+  for (const href of ["/", "/packages", "/frameworks", "/forks"]) {
+    fs.writeFileSync(path.join(dir, hrefToHtmlPath(href)), `<html><body><p>synthetic catalog page ${href}</p></body></html>`);
+  }
+  fs.writeFileSync(path.join(dir, "404.html"), `<html><body><p>404 not found</p></body></html>`);
+
+  const fx = synthesizeOffPage(contentDir);
+  writeOffPageFixtures(dir, fx);
+
+  return dir;
+}
+
+/**
+ * Copies check.mjs (plus the guard/lib/ it imports) into a scratch tree
+ * shaped like `<scratchRoot>/guard/check.mjs`, WITH one exact transform
+ * applied — this is what makes H1/H2 (task 0063 mục 10.4) a genuine
+ * "remove one line and see what still catches it" measurement rather than
+ * a description of one.
+ *
+ * The nested `guard/` shape matters, not just the file: check.mjs computes
+ * `ROOT = path.join(import.meta.dirname, "..")` and writes
+ * `guard/last-run.json` under it on every run — a flat copy would point
+ * ROOT at the scratch tree's PARENT (outside our control, likely
+ * unwritable) and crash every H1/H2 subprocess for a reason that has
+ * nothing to do with what's being measured.
+ */
+function buildWeakenedCheck(transform, label) {
+  const src = fs.readFileSync(path.join(ROOT, "guard", "check.mjs"), "utf8");
+  const out = transform(src);
+  if (out === src) throw new Error(`buildWeakenedCheck(${label}): transform made no change — check.mjs source moved?`);
+  const scratchRoot = fs.mkdtempSync(path.join(os.tmpdir(), "docs-guard-weak-"));
+  const guardDir = path.join(scratchRoot, "guard");
+  fs.mkdirSync(guardDir, { recursive: true });
+  fs.writeFileSync(path.join(guardDir, "check.mjs"), out);
+  fs.cpSync(path.join(ROOT, "guard", "lib"), path.join(guardDir, "lib"), { recursive: true });
+  return path.join(guardDir, "check.mjs");
 }
 
 /** Pull one number out of the guard's `counts:` line — used to tell "clean" from "blind". */
@@ -193,7 +284,8 @@ cases.push({
       '```ts\ninterface HttpRetryPolicyOptions {\n  maxAttempts?: number;\n}\n```\n\nZero dependencies, built on `fetch`.',
     );
     fs.writeFileSync(f, src);
-    return { args: ["--content-dir", dir, "--skip-live", "--skip-live-ok"] };
+    const distDir = synthesizeDist(dir);
+    return { args: ["--content-dir", dir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
   },
 });
 
@@ -208,7 +300,8 @@ cases.push({
     let src = fs.readFileSync(f, "utf8");
     src = src.replace("yarn add @ecosy/http", "yarn add @ecosy/htttp");
     fs.writeFileSync(f, src);
-    return { args: ["--content-dir", dir, "--skip-live", "--skip-live-ok"] };
+    const distDir = synthesizeDist(dir);
+    return { args: ["--content-dir", dir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
   },
 });
 
@@ -228,7 +321,8 @@ cases.push({
     src = src.replace("yarn add @ecosy/hoapp hono", "yarn add @ecosy/hoapp @ecosy/nextjs hono");
     if (src === before) throw new Error("M2b setup: install line not found verbatim — content moved?");
     fs.writeFileSync(f, src);
-    return { args: ["--content-dir", dir, "--skip-live", "--skip-live-ok"] };
+    const distDir = synthesizeDist(dir);
+    return { args: ["--content-dir", dir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
   },
 });
 
@@ -248,7 +342,8 @@ cases.push({
     src = src.replace("[`Route`](/next/route)", "[`Route`](/orm)");
     if (src === before) throw new Error("M3 setup: anchor text not found — content moved?");
     fs.writeFileSync(f, src);
-    return { args: ["--content-dir", dir, "--skip-live", "--skip-live-ok"] };
+    const distDir = synthesizeDist(dir);
+    return { args: ["--content-dir", dir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
   },
 });
 
@@ -268,7 +363,8 @@ cases.push({
       "- [`Http`](/orm) — this bullet is the mutation under test\n\nZero dependencies, built on `fetch`.",
     );
     fs.writeFileSync(f, src);
-    return { args: ["--content-dir", dir, "--skip-live", "--skip-live-ok"] };
+    const distDir = synthesizeDist(dir);
+    return { args: ["--content-dir", dir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
   },
 });
 
@@ -404,7 +500,8 @@ cases.push({
     const pj = JSON.parse(fs.readFileSync(pjFile, "utf8"));
     pj.exports["./rejoinder"] = { types: "./dist/rejoinder.d.ts", import: "./dist/rejoinder.d.ts", require: "./dist/rejoinder.d.ts" };
     fs.writeFileSync(pjFile, JSON.stringify(pj, null, 2));
-    return { args: ["--content-dir", contentDir, "--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
+    const distDir = synthesizeDist(contentDir);
+    return { args: ["--content-dir", contentDir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
   },
 });
 
@@ -438,7 +535,8 @@ cases.push({
     const pj = JSON.parse(fs.readFileSync(pjFile, "utf8"));
     pj.exports["./tessellate"] = { types: "./dist/tessellate.d.ts", import: "./dist/tessellate.d.ts", require: "./dist/tessellate.d.ts" };
     fs.writeFileSync(pjFile, JSON.stringify(pj, null, 2));
-    return { args: ["--content-dir", contentDir, "--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
+    const distDir = synthesizeDist(contentDir);
+    return { args: ["--content-dir", contentDir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
   },
 });
 
@@ -478,7 +576,8 @@ cases.push({
     const pj = JSON.parse(fs.readFileSync(pjFile, "utf8"));
     pj.exports["./parcel"] = { types: "./dist/parcel.d.ts", import: "./dist/parcel.d.ts", require: "./dist/parcel.d.ts" };
     fs.writeFileSync(pjFile, JSON.stringify(pj, null, 2));
-    return { args: ["--content-dir", contentDir, "--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
+    const distDir = synthesizeDist(contentDir);
+    return { args: ["--content-dir", contentDir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
   },
 });
 
@@ -626,7 +725,244 @@ cases.push({
     );
     if (src === before) throw new Error("M6 setup: sentence not found verbatim — content moved?");
     fs.writeFileSync(f, src);
-    return { args: ["--content-dir", dir, "--skip-live", "--skip-live-ok"] };
+    const distDir = synthesizeDist(dir);
+    return { args: ["--content-dir", dir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
+  },
+});
+
+// ---------------------------------------------------------------------------
+// N1–N7 / C1 / C2 — the dist/client region task 0063 added: checkDist() in
+// check.mjs. Every N case here mutates a SYNTHESIZED dist/ (synthesizeDist(),
+// above), never the real project's dist/client — same reason every content
+// case above builds its own tmp content/ copy: "đừng đột biến cây thật".
+// ---------------------------------------------------------------------------
+
+// N1 — the plainest shape: a page that WAS generated is simply not there.
+cases.push({
+  name: "N1 dist: one generated .html is deleted from dist/client",
+  expectKind: "PAGE-NOT-GENERATED",
+  expectPage: "/core/cache",
+  setup() {
+    const distDir = synthesizeDist(REAL_CONTENT);
+    fs.rmSync(path.join(distDir, "core", "cache.html"));
+    return { args: ["--content-dir", REAL_CONTENT, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
+  },
+});
+
+// N2 — the `generateStaticParams().slice(0, 1)` shape: of a multi-page
+// package, only the FIRST sub-page survives. /core has eight real sub-pages
+// (batch, cache, serialize, session, subscriber, syhemo, types, utilities) —
+// enough to tell "one page missing" (N1's shape) apart from "a whole family
+// past the first got cut" (this one).
+cases.push({
+  name: "N2 dist: generateStaticParams().slice(0, 1) shape — every sub-page but the FIRST of a multi-page package is missing",
+  expectKind: "PAGE-NOT-GENERATED",
+  expectPage: "/core/cache",
+  setup() {
+    const distDir = synthesizeDist(REAL_CONTENT);
+    const groups = loadContent(REAL_CONTENT);
+    const subPages = groups.core.pages.filter((p) => p.file !== "index.md").map((p) => p.href);
+    if (subPages.length < 3) throw new Error("N2 setup: /core needs several sub-pages to demonstrate slice(0,1) — content moved?");
+    for (const href of subPages.slice(1)) fs.rmSync(path.join(distDir, hrefToHtmlPath(href)));
+    return { args: ["--content-dir", REAL_CONTENT, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
+  },
+});
+
+// N3 — the REAL shape, measured on a REAL build, not a synthesized fixture:
+// remove `export const dynamic = "force-static";` from one page's source in
+// a scratch copy of the WHOLE working tree (current, uncommitted state —
+// this is what will actually ship), run the real `vinext build`, and check
+// the guard against that build's real dist/client. Confirms, on THIS
+// commit's code, the exact claim task 0063 mục 3.1 makes: the build still
+// exits 0 and the page is just gone — not a description of that claim.
+cases.push({
+  name: "N3 dist: removing force-static from ONE real page — measured on a REAL vinext build, not a fixture",
+  expectKind: "PAGE-NOT-GENERATED",
+  expectPage: "/forks",
+  setup() {
+    const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "docs-guard-n3-"));
+    // clonefile (-c) on APFS: near-instant, no real copy of 360MB of
+    // node_modules until something actually writes to it.
+    for (const entry of [
+      "app",
+      "components",
+      "content",
+      "guard",
+      "lib",
+      "next.config.ts",
+      "next-env.d.ts",
+      "package.json",
+      "public",
+      "scripts",
+      "src",
+      "tsconfig.json",
+      "vite.config.ts",
+      "wrangler.jsonc",
+    ]) {
+      execFileSync("cp", ["-c", "-R", path.join(ROOT, entry), path.join(scratch, entry)]);
+    }
+    execFileSync("cp", ["-c", "-R", path.join(ROOT, "node_modules"), path.join(scratch, "node_modules")]);
+
+    const forksPage = path.join(scratch, "app", "forks", "page.tsx");
+    const src = fs.readFileSync(forksPage, "utf8");
+    const marker = 'export const dynamic = "force-static";\n';
+    if (!src.startsWith(marker)) throw new Error("N3 setup: app/forks/page.tsx does not start with the force-static line — moved?");
+    fs.writeFileSync(forksPage, src.slice(marker.length));
+
+    let buildResult;
+    try {
+      buildResult = { code: 0, out: execFileSync("npx", ["vinext", "build"], { cwd: scratch, encoding: "utf8" }) };
+    } catch (e) {
+      buildResult = { code: e.status ?? 1, out: (e.stdout || "") + (e.stderr || "") };
+    }
+    // The claim under test is specifically that the BUILD ITSELF does not
+    // fail — a nonzero exit here would mean this case measured the wrong
+    // thing entirely, not that the mutation "worked".
+    console.log(`  (N3: real \`vinext build\` on the mutated scratch copy exited ${buildResult.code} — expected 0)`);
+    if (buildResult.code !== 0) throw new Error(`N3 setup: real vinext build exited ${buildResult.code}, expected 0 — see mutate.mjs's own console output above`);
+
+    return { args: ["--content-dir", path.join(scratch, "content"), "--dist-dir", path.join(scratch, "dist", "client"), "--skip-live", "--skip-live-ok"] };
+  },
+});
+
+// N4 — search.json AS SHIPPED (in dist/, not the live site) drops a real
+// page. This is what actually catches vinext skipping the three route.ts
+// handlers if emit-offpage.mjs's own positive assertions (status 200,
+// non-empty, valid JSON) were ever weakened or bypassed.
+cases.push({
+  name: "N4 dist: search.json (as shipped) drops a real page",
+  expectKind: "DRIFT-SEARCHJSON-PATHLIST",
+  expectPage: null,
+  setup() {
+    const distDir = synthesizeDist(REAL_CONTENT);
+    const searchFile = path.join(distDir, "search.json");
+    const entries = JSON.parse(fs.readFileSync(searchFile, "utf8"));
+    const filtered = entries.filter((e) => e.path !== "/next/route");
+    if (filtered.length === entries.length) throw new Error("N4 setup: /next/route not found in the synthesized search.json — content moved?");
+    fs.writeFileSync(searchFile, JSON.stringify(filtered, null, 1));
+    return { args: ["--content-dir", REAL_CONTENT, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
+  },
+});
+
+// N5 — the OTHER file emit-markdown.mjs writes per page (the .md copy)
+// missing, everything else (the .html) present and fine.
+cases.push({
+  name: "N5 dist: one page's raw .md copy is missing from dist/client",
+  expectKind: "MD-NOT-GENERATED",
+  expectPage: "/next/route",
+  setup() {
+    const distDir = synthesizeDist(REAL_CONTENT);
+    fs.rmSync(path.join(distDir, "next", "route.md"));
+    return { args: ["--content-dir", REAL_CONTENT, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
+  },
+});
+
+// N6 — the one PAGE-NOT-GENERATED counting CANNOT catch: the file exists,
+// is non-empty, the count adds up — it is just the WRONG page (here: a real
+// 404 shell copied over a real page, the actual shape of a prerender step
+// that renders successfully but resolves the wrong route).
+cases.push({
+  name: "N6 dist: a page's .html is overwritten with the 404 shell — file still there, the COUNT still adds up",
+  expectKind: "PAGE-IS-NOT-THE-PAGE",
+  expectPage: "/core/cache",
+  setup() {
+    const distDir = synthesizeDist(REAL_CONTENT);
+    const notFoundBody = fs.readFileSync(path.join(distDir, "404.html"), "utf8");
+    fs.writeFileSync(path.join(distDir, "core", "cache.html"), notFoundBody);
+    return { args: ["--content-dir", REAL_CONTENT, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
+  },
+});
+
+// N7 — the NEGATIVE half of G4, proven with its own case rather than left
+// implicit: /anchor's own identity fragment is copied into EVERY OTHER
+// page's html, the shape of a string living in a block reproduced on every
+// page (this site's own nav, which is exactly what defeated an <h1> anchor —
+// task 0063 mục 7.2). Without a leak check, this is invisible: /anchor's OWN
+// html still contains its own fragment, so the positive half alone sees
+// nothing wrong anywhere.
+cases.push({
+  name: "N7 dist: /anchor's identity fragment leaks into EVERY other page's html (simulates a string living in an always-printed block)",
+  expectKind: "PAGE-IS-NOT-THE-PAGE",
+  expectPage: "/anchor",
+  setup() {
+    const distDir = synthesizeDist(REAL_CONTENT);
+    const groups = loadContent(REAL_CONTENT);
+    const anchorPage = Object.values(groups)
+      .flatMap((g) => g.pages)
+      .find((p) => p.href === "/anchor");
+    if (!anchorPage) throw new Error("N7 setup: /anchor page not found — content moved?");
+    const fragment = markdownInlineToPlain(longestProseLine(anchorPage.body));
+    for (const page of Object.values(groups).flatMap((g) => g.pages)) {
+      if (page.href === "/anchor") continue;
+      const file = path.join(distDir, hrefToHtmlPath(page.href));
+      const html = fs.readFileSync(file, "utf8");
+      fs.writeFileSync(file, html.replace("</body>", `<nav class="leaked">${fragment}</nav></body>`));
+    }
+    return { args: ["--content-dir", REAL_CONTENT, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
+  },
+});
+
+// C1 — POSITIVE CONTROL: adding one real page must raise FOUR counts
+// together by exactly 1 — pagesScanned (already existed), and the three
+// task 0063 added (htmlGenerated, mdGenerated, identityFragmentsChecked).
+// This is the case that proves those three floors are DERIVED, not ghim
+// cứng: content/ grew by two real pages WHILE this task was being written
+// (task 0063 mục 1), and a literal-number floor would have gone stale
+// before the task was even handed off.
+cases.push({
+  name: "C1 CONTROL: adding one real page raises pagesScanned, htmlGenerated, mdGenerated AND identityFragmentsChecked together by exactly 1",
+  countRise: true,
+  counters: ["pagesScanned", "htmlGenerated", "mdGenerated", "identityFragmentsChecked"],
+  setup() {
+    const contentDir = freshContentCopy();
+    const body = [
+      "---",
+      "title: Turbocharge",
+      "order: 99",
+      "---",
+      "",
+      "# Turbocharge",
+      "",
+      "This sentence exists only so the identity-fragment check has a real prose line long enough to anchor on for this brand new page.",
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(contentDir, "http", "turbocharge-c1.md"), body);
+    const distDir = synthesizeDist(contentDir);
+    return { args: ["--content-dir", contentDir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
+  },
+});
+
+// C2 — POSITIVE CONTROL: a new page whose `# H1` DUPLICATES an existing
+// page's H1 verbatim must NOT be flagged by G4 — proof that identity is
+// anchored on prose (task 0063 mục 7.2's own measurement: `<h1>` is
+// reproduced on every page by the nav, so it cannot be an identity anchor).
+// Sight-proof is identityFragmentsChecked rising by 1, same shape as every
+// other control in this file.
+cases.push({
+  name: "C2 CONTROL: a new page with a DUPLICATE `# H1` must not be flagged — proves G4 anchors on prose, not the heading",
+  control: true,
+  expectKind: "PAGE-IS-NOT-THE-PAGE",
+  expectPage: null,
+  requireCount: "identityFragmentsChecked",
+  setup() {
+    const contentDir = freshContentCopy();
+    // "Cache" is content/core/cache.md's real H1 (task 0063 mục 7.2's own
+    // example of why <h1> can't be the anchor) — duplicated here verbatim,
+    // on an unrelated page, under a different package's slug.
+    const body = [
+      "---",
+      "title: Cache",
+      "order: 99",
+      "---",
+      "",
+      "# Cache",
+      "",
+      "A sentence long enough to serve as this new page's own identity fragment, distinct from every other page's prose in this content tree.",
+      "",
+    ].join("\n");
+    fs.writeFileSync(path.join(contentDir, "http", "cache-c2.md"), body);
+    const distDir = synthesizeDist(contentDir);
+    return { args: ["--content-dir", contentDir, "--dist-dir", distDir, "--skip-live", "--skip-live-ok"] };
   },
 });
 
@@ -645,10 +981,16 @@ console.log(`  (${baseline.code === 0 ? "GREEN" : "RED"} on unmutated content, a
 
 console.log("\nMutation cases:");
 const rows = [];
+// N1/N2/N3/N6/N7's fixtures get reused verbatim by the H1/H2 harness cases
+// below — "ghép với đúng con production nó định canh", not a fresh,
+// possibly-different fixture built a second time.
+const caseArgsByCode = new Map();
 for (const c of cases) {
   let result;
   try {
     const { args, env } = c.setup();
+    const code = c.name.split(" ")[0];
+    if (/^[A-Z]\d+$/.test(code)) caseArgsByCode.set(code, { args, env, expectKind: c.expectKind, expectPage: c.expectPage });
     result = runGuard(args, env);
   } catch (e) {
     rows.push({ name: c.name, outcome: "SKIP (setup failed)", detail: String(e.message) });
@@ -657,6 +999,20 @@ for (const c of cases) {
   const actual = result.code === 0 ? "GREEN" : "RED";
   if (c.widen) {
     rows.push({ name: c.name, outcome: `OBSERVED-${actual}`, actual, detail: "(widen — no fixed expectation)" });
+    continue;
+  }
+  if (c.countRise) {
+    // C1: a real page being added must raise EVERY named counter by exactly
+    // 1 against the baseline — not ">= baseline", which a bug that stopped
+    // counting entirely (stuck at a constant) could also satisfy by accident
+    // if the constant happened to already exceed the old baseline.
+    const deltas = c.counters.map((k) => {
+      const before = countFromOutput(baseline.out, k);
+      const after = countFromOutput(result.out, k);
+      return { k, before, after, ok: before !== null && after !== null && after === before + 1 };
+    });
+    const outcome = deltas.every((d) => d.ok) ? "CAUGHT" : "SURVIVED";
+    rows.push({ name: c.name, outcome, actual, detail: deltas.map((d) => `${d.k} ${d.before}->${d.after}`).join(", ") });
     continue;
   }
   if (c.control) {
@@ -700,7 +1056,7 @@ for (const c of cases) {
 for (const r of rows) console.log(`  [${r.outcome.padEnd(22)}] ${r.name}`);
 
 const caught = rows.filter((r) => r.outcome === "CAUGHT").length;
-const wanted = cases.filter((c) => c.expectKind).length;
+const wanted = cases.filter((c) => c.expectKind || c.countRise).length;
 console.log(`\n${caught}/${wanted} required mutations caught with the expected finding kind.`);
 const survivors = rows.filter(
   (r) => r.outcome === "SURVIVED" || r.outcome === "RED-BUT-WRONG-KIND" || r.outcome.startsWith("SKIP") || r.outcome.startsWith("CONTROL-"),
@@ -709,3 +1065,85 @@ if (survivors.length) {
   console.log("Unhandled (printed, not hidden):");
   for (const s of survivors) console.log(`  - ${s.name}: ${s.outcome}${s.detail ? " — " + s.detail : ""}`);
 }
+
+// ---------------------------------------------------------------------------
+// H1 / H2 — harness mutations on check.mjs ITSELF, chấm bằng PHÉP GHÉP with
+// the exact N-case fixtures they're meant to guard, per house rule ("làm yếu
+// một dòng test không tự làm suite đỏ — phải ghép với con production").
+// NOT counted in the 25-con floor (task 0063 mục 10.4).
+// ---------------------------------------------------------------------------
+
+console.log("\nHarness cases (ghép với N-case fixtures — NOT counted in the 25):");
+
+// Overall exit code is USELESS as the "still caught" signal here: every N
+// case checks REAL content/ (--content-dir REAL_CONTENT, so H1/H2 can reuse
+// the exact same fixtures the main loop already built), and real content/
+// carries 7 pre-existing, unrelated findings today (the prose heading +
+// six MISSING-ENTRYPOINT bugs task 0057-0062 already know about) — every
+// single run is RED regardless of what this harness does. Measured while
+// building this: the first version compared raw exit codes and reported
+// EVERY case "still RED", including H2 x N7, which is impossible (N7's
+// mutation touches nothing G1/the other checks look at). The fix is a
+// TARGETED signal per harness — the specific backup mechanism each one is
+// actually asking about — not "is this run red at all".
+function reportHarness(label, transform, codes, stillCaughtSignal) {
+  let weakFile;
+  try {
+    weakFile = buildWeakenedCheck(transform, label);
+  } catch (e) {
+    console.log(`  ${label}: SKIP (${e.message})`);
+    return;
+  }
+  for (const code of codes) {
+    const stored = caseArgsByCode.get(code);
+    if (!stored) {
+      console.log(`  ${label} x ${code}: SKIP (no fixture captured — did ${code}'s setup fail above?)`);
+      continue;
+    }
+    const r = runGuardWithBin(weakFile, stored.args, stored.env);
+    const stillCaught = stillCaughtSignal(r.out, stored);
+    console.log(
+      `  ${label} x ${code}: ${stillCaught ? "still caught by another mechanism -> REDUNDANT so far" : "NOT caught by anything else -> this was the SOLE shield"}`,
+    );
+  }
+}
+
+// H1 — remove G1's two per-page PAGE-NOT-GENERATED assertions. Ghép with
+// N1/N2 (dist-only) and N3 (a real build). The targeted backup signal is
+// the derived zeroFloors catching htmlGenerated falling short — printed as
+// an "EMPTY EXTRACTOR" line naming htmlGenerated — since the exact
+// PAGE-NOT-GENERATED text is obviously gone by construction (that's the
+// line removed) and is not the interesting question.
+reportHarness(
+  "H1",
+  (src) => src.replace(/else bad\.push\(\{ region: "dist", kind: "PAGE-NOT-GENERATED",[^}]*\}\);/g, "else {} /* H1: weakened */;"),
+  ["N1", "N2", "N3"],
+  (out) => out.split("\n").some((line) => line.startsWith("EMPTY EXTRACTOR") && line.includes("htmlGenerated")),
+);
+
+// H2 — remove G4's NEGATIVE half (the leak check) entirely, keeping the
+// positive "own fragment present" half intact. Ghép with N6 (own fragment
+// missing — positive half alone still catches this, so REDUNDANT is the
+// right answer) and N7 (own fragment still present, only leaked elsewhere —
+// ONLY the negative half can catch this one, so H2 x N7 not being caught by
+// anything else is exactly what proves the negative half is load-bearing,
+// not decorative). Signal: the SAME kind+page pair the N-case itself
+// expects — if the positive half alone still emits it, some other mechanism
+// caught it; if not, nothing did.
+reportHarness(
+  "H2",
+  (src) => {
+    const startMarker = "    const leaks = ";
+    const start = src.indexOf(startMarker);
+    if (start === -1) return src;
+    const tail = src.slice(start);
+    const alsoIdx = tail.indexOf("also present on");
+    if (alsoIdx === -1) return src;
+    const pushEnd = tail.indexOf("});", alsoIdx);
+    if (pushEnd === -1) return src;
+    const end = start + pushEnd + 3;
+    return src.slice(0, start) + "/* H2: weakened — leak/negative check removed */" + src.slice(end);
+  },
+  ["N6", "N7"],
+  (out, stored) => hasFinding(out, stored.expectKind, stored.expectPage),
+);

@@ -33,6 +33,8 @@
  * Usage:
  *   node guard/check.mjs                  # full run against content/, live off-page checks
  *   node guard/check.mjs --content-dir X  # run against a different content tree (mutation testing)
+ *   node guard/check.mjs --dist-dir X     # check a different dist/client (default: <root>/dist/client)
+ *                                         # — runs UNCONDITIONALLY; a missing dir is DIST-MISSING, not skipped
  *   node guard/check.mjs --skip-live      # skip off-page entirely — reports RED (unverified), not green
  *   node guard/check.mjs --skip-live --skip-live-ok
  *                                         # same, but acknowledged: off-page's absence won't force RED
@@ -43,7 +45,16 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { loadContent, apiHeadings, inlineSpans } from "./lib/content.mjs";
+import {
+  loadContent,
+  apiHeadings,
+  inlineSpans,
+  longestProseLine,
+  markdownInlineToPlain,
+  stripTags,
+  hrefToHtmlPath,
+  hrefToMdPath,
+} from "./lib/content.mjs";
 import {
   resolveTypes,
   namesOf,
@@ -60,6 +71,7 @@ import { resolvePackage } from "./lib/registry.mjs";
 
 const ROOT = path.join(import.meta.dirname, "..");
 const DEFAULT_CONTENT_DIR = path.join(ROOT, "content");
+const DEFAULT_DIST_DIR = path.join(ROOT, "dist", "client");
 const ORIGIN = "https://docs.ecosy.io";
 const CATALOG_PATHS = ["/", "/packages", "/frameworks", "/forks"];
 const OFFPAGE_PATHS = ["/llms.txt", "/llms-full.txt", "/search.json"];
@@ -78,10 +90,11 @@ for (const [name, dir] of Object.entries(WORKSPACE_OVERRIDES)) {
 // ---------- CLI args ----------
 
 function parseArgs(argv) {
-  const a = { contentDir: DEFAULT_CONTENT_DIR, skipLive: false, quiet: false };
+  const a = { contentDir: DEFAULT_CONTENT_DIR, distDir: DEFAULT_DIST_DIR, skipLive: false, quiet: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--content-dir") a.contentDir = path.resolve(argv[++i]);
+    else if (arg === "--dist-dir") a.distDir = path.resolve(argv[++i]);
     else if (arg === "--skip-live") a.skipLive = true;
     else if (arg === "--skip-live-ok") a.skipLiveOk = true; // explicit "I know off-page wasn't verified this run"
     else if (arg === "--quiet") a.quiet = true;
@@ -836,6 +849,155 @@ async function checkOffPage(groups, opts) {
 }
 
 // ================================================================
+// CHECK G — dist/client: is the thing about to SHIP actually complete?
+//
+// Task 0063: docs.ecosy.io moved from "sinh một Worker" to "sinh một thư
+// mục HTML tĩnh", and a static-export build can drop a page with NO signal
+// anywhere else a guard already looks — `vinext build` exits 0, prints
+// nothing, and the page is just... not there. Every check above this one
+// reads content/ and a package's .d.ts; none of them ever opens dist/. This
+// region is the only one that does, and it is why it must run
+// UNCONDITIONALLY (house rule: "vắng cổng = ĐỎ, không phải bỏ qua") — a
+// missing or wrong --dist-dir is exactly the failure mode this exists to
+// catch, not a reason to skip.
+//
+// Deliberately does NOT read dist/server/vinext-prerender.json for its
+// counts — that file is vinext's own report about itself (house rule: "một
+// bộ canh không được đọc kỳ vọng từ chính thứ nó canh"). Every count here
+// comes from independently statting/reading files on disk and comparing
+// against content/ + the hand-written CATALOG_PATHS, the same two sources
+// of truth every other check in this file already uses.
+// ================================================================
+
+async function checkDist(groups, distDir, opts) {
+  const bad = [];
+  const counts = { htmlGenerated: 0, mdGenerated: 0, identityFragmentsChecked: 0 };
+
+  if (!fs.existsSync(distDir)) {
+    bad.push({ region: "dist", kind: "DIST-MISSING", detail: distDir });
+    return { bad, counts };
+  }
+
+  const pages = Object.values(groups).flatMap((g) => g.pages);
+  const allHtmlHrefs = pages.map((p) => p.href).concat(CATALOG_PATHS);
+
+  // ---- G1 PAGE-NOT-GENERATED: every content page + the four catalog pages
+  // + 404.html must exist on disk and be non-empty. A build that silently
+  // dropped a route (skipped/dynamic, a generateStaticParams() regression,
+  // …) leaves exactly one hole here — this is the positive assertion that
+  // catches it, backed by the zeroFloors expression in run() as a second,
+  // independent trip-wire on the same count. ----
+  for (const href of allHtmlHrefs) {
+    const file = path.join(distDir, hrefToHtmlPath(href));
+    let size = -1;
+    try {
+      size = fs.statSync(file).size;
+    } catch {}
+    if (size > 0) counts.htmlGenerated++;
+    else bad.push({ region: "dist", kind: "PAGE-NOT-GENERATED", page: href, detail: file });
+  }
+  {
+    const file404 = path.join(distDir, "404.html");
+    let size = -1;
+    try {
+      size = fs.statSync(file404).size;
+    } catch {}
+    if (size > 0) counts.htmlGenerated++;
+    else bad.push({ region: "dist", kind: "PAGE-NOT-GENERATED", page: "/404", detail: file404 });
+  }
+
+  // ---- G2 MD-NOT-GENERATED: every content page's raw-markdown copy, in the
+  // exact shape scripts/emit-markdown.mjs promises ("Source: <origin><href>"
+  // then the body with frontmatter stripped) — task 0063 mục 6.2 draws the
+  // line here rather than at "the live site serves it with the right
+  // Content-Type", which needs a real host and is out of this task's reach.
+  // mdGenerated only ever counts a page once it PASSES, so it is bounded
+  // above by pages.length by construction — the "bằng, không phải >=" the
+  // task asks for falls out of the shape of this loop rather than needing a
+  // separate equality assertion. ----
+  for (const page of pages) {
+    const file = path.join(distDir, hrefToMdPath(page.href));
+    let text = null;
+    try {
+      text = fs.readFileSync(file, "utf8");
+    } catch {}
+    if (text === null) {
+      bad.push({ region: "dist", kind: "MD-NOT-GENERATED", page: page.href, detail: "file missing" });
+      continue;
+    }
+    const expectedSource = `Source: ${ORIGIN}${page.href}`;
+    if (!text.startsWith(expectedSource) || !text.includes(page.body.trim())) {
+      bad.push({ region: "dist", kind: "MD-NOT-GENERATED", page: page.href, detail: "content does not match content/" });
+      continue;
+    }
+    counts.mdGenerated++;
+  }
+
+  // ---- G3 off-page, sourced from dist/ instead of the network: reuses the
+  // EXACT same comparison checkOffPage() already runs for the live site
+  // (URL allowlist + the three *-PATHLIST drift checks + the BODY drift
+  // check), fed from files instead of a fetch. This is what catches vinext
+  // skipping the three route.ts handlers (task 0063 mục 3.1 món 1) — the
+  // build exits 0 and prints nothing, so an unconditional check reading
+  // dist/ directly is the only thing that goes red for it. Three missing
+  // files is reported directly rather than handed to checkOffPage(), whose
+  // own FETCH-FAILED path is written for a network exception, not a clear
+  // "which of the three is missing" report. ----
+  const offPageFiles = {
+    llmsTxtFile: path.join(distDir, "llms.txt"),
+    llmsFullFile: path.join(distDir, "llms-full.txt"),
+    searchJsonFile: path.join(distDir, "search.json"),
+  };
+  const missingOffPage = Object.entries(offPageFiles).filter(([, f]) => !fs.existsSync(f));
+  if (missingOffPage.length) {
+    for (const [, f] of missingOffPage) bad.push({ region: "dist", kind: "DIST-OFFPAGE-MISSING", detail: f });
+  } else {
+    const offPage = await checkOffPage(groups, { skipLive: true, ...offPageFiles });
+    for (const b of offPage.bad) bad.push({ ...b, region: "dist" });
+  }
+
+  // ---- G4 PAGE-IS-NOT-THE-PAGE: G1 counts bytes, not content. A build that
+  // renders the SAME shell (or a stray 404) into every route would sail
+  // through G1 with every file present and non-empty (task 0063 mục 7.2,
+  // N6: the one mutation the counting alone cannot catch). Identity is
+  // checked by a positive AND a negative half — the fragment must be found
+  // in the page's OWN html, and must NOT be found in any other page's html
+  // (house rule: "một mệnh đề khẳng định phải là cặp dương-âm"). Without
+  // the negative half, a global block reproduced on every page (the nav,
+  // exactly as it defeated an <h1> anchor here) would silently satisfy the
+  // positive half for every page — task 0063's N7 mutation exists to prove
+  // this half is real, not decorative. ----
+  const htmlText = new Map();
+  for (const href of allHtmlHrefs) {
+    const file = path.join(distDir, hrefToHtmlPath(href));
+    try {
+      htmlText.set(href, stripTags(fs.readFileSync(file, "utf8")));
+    } catch {}
+  }
+
+  for (const page of pages) {
+    counts.identityFragmentsChecked++;
+    const rawFragment = longestProseLine(page.body);
+    if (!rawFragment) {
+      bad.push({ region: "dist", kind: "NO-IDENTITY-FRAGMENT", page: page.href, detail: "no prose line >= 40 chars in content/" });
+      continue;
+    }
+    // Compared as marked.js would RENDER it, not as it's spelled in
+    // content/ — see markdownInlineToPlain()'s own comment for the 6/35
+    // real pages that false-flagged without this.
+    const fragment = markdownInlineToPlain(rawFragment);
+    const own = htmlText.has(page.href) && htmlText.get(page.href).includes(fragment);
+    if (!own) bad.push({ region: "dist", kind: "PAGE-IS-NOT-THE-PAGE", page: page.href, detail: `own identity fragment not found in ${hrefToHtmlPath(page.href)}` });
+
+    const leaks = [...htmlText.entries()].filter(([h, t]) => h !== page.href && t.includes(fragment)).map(([h]) => h);
+    if (leaks.length)
+      bad.push({ region: "dist", kind: "PAGE-IS-NOT-THE-PAGE", page: page.href, detail: `identity fragment also present on ${leaks.join(", ")}` });
+  }
+
+  return { bad, counts };
+}
+
+// ================================================================
 // runner
 // ================================================================
 
@@ -853,13 +1015,14 @@ export async function run(opts) {
   const D = checkEntryPoints(groups, surfaces);
   const E = await checkOffPage(groups, opts);
   const F = checkFamilyLinks(groups, surfaces);
+  const G = await checkDist(groups, opts.distDir);
 
   // The core-consolidation boundary (content still teaching an absorbed
   // package under its own standalone name) counts toward RED, same as any
   // other finding — the coordinator's own framing calls it "hại hơn" (more
   // harmful) than a plain missing entry point, precisely because it's a
   // page actively teaching the pre-consolidation shape, not just silent.
-  const allBad = [...A.bad, ...B.bad, ...C.bad, ...E.bad, ...F.bad, ...D.bad, ...D.boundary];
+  const allBad = [...A.bad, ...B.bad, ...C.bad, ...E.bad, ...F.bad, ...D.bad, ...D.boundary, ...G.bad];
 
   // Self-check: an extractor that silently returns [] is indistinguishable from
   // "nothing wrong" unless we assert it actually looked at something.
@@ -896,6 +1059,14 @@ export async function run(opts) {
     // every declaration in these packages is a simple inline object/class).
     memberLookupCalls: memberLookupStats.total,
     memberLookupUnknown: memberLookupStats.unknown,
+    // dist/client region (task 0063) — a page not sinh ra is hỏng im lặng,
+    // so these three get their own floors below, DERIVED from pageCount at
+    // run time rather than ghim cứng, exactly because content/ grew by two
+    // pages (batch.md, session.md) WHILE this task was being written (task
+    // 0063 mục 1/6.4) — a literal number here would already be wrong.
+    htmlGenerated: G.counts.htmlGenerated,
+    mdGenerated: G.counts.mdGenerated,
+    identityFragmentsChecked: G.counts.identityFragmentsChecked,
   };
   const zeroFloors = {
     pagesScanned: 32,
@@ -915,6 +1086,13 @@ export async function run(opts) {
     // 71.
     entryCitationsResolved: 16,
     familyLinksChecked: 1,
+    // Every content page + the 4 hand-written catalog pages + 404.html.
+    // An expression, not a literal — task 0063 mục 1's whole point: content/
+    // had 33 pages when the task was drafted and 35 by the time it was
+    // handed off, and it will grow again.
+    htmlGenerated: pageCount + CATALOG_PATHS.length + 1,
+    mdGenerated: pageCount,
+    identityFragmentsChecked: pageCount,
   };
   // urlsChecked is legitimately 0 when off-page was deliberately skipped
   // (--skip-live, nothing fetched at all) — it does NOT belong in the same
@@ -954,6 +1132,7 @@ export async function run(opts) {
       missingEntrypoints: D.bad,
       offPage: E.bad,
       familyLinks: F.bad,
+      dist: G.bad,
     },
     allBad,
     ok: allBad.length === 0 && emptyExtractors.length === 0 && unverifiedRegions.length === 0,
