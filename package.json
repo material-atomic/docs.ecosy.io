@@ -24,9 +24,8 @@
   "type": "module",
   "scripts": {
     "dev": "vinext dev",
-    "build": "vinext build && node scripts/emit-markdown.mjs",
-    "start": "wrangler dev --config dist/server/wrangler.json",
-    "deploy": "vinext-cloudflare deploy --config dist/server/wrangler.json",
+    "build": "vinext build && node scripts/emit-offpage.mjs && node scripts/emit-markdown.mjs",
+    "start": "node scripts/serve-static.mjs",
     "compat": "vinext check"
   }
 }

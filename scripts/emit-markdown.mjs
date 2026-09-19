@@ -60,11 +60,21 @@ for (const slug of await readdir(CONTENT)) {
 }
 
 /* Served as text rather than downloaded. Cloudflare gives .md an octet-stream
-   type otherwise, which makes a browser save the file instead of showing it. */
-await appendFile(
-  path.join(OUT, "_headers"),
-  `\n/*.md\n  Content-Type: text/plain; charset=utf-8\n`,
-  "utf8",
-);
+   type otherwise, which makes a browser save the file instead of showing it.
+   This is CLOUDFLARE PAGES' OWN _headers syntax — it says nothing on any
+   other host (task 0063 mục 6.2), and it stays a "not measured elsewhere"
+   assumption, not a promise this build can keep on its own.
+   Appending is idempotent by CONTENT, not by having run once: two runs
+   against the same dist/ (no rebuild in between — e.g. this script invoked
+   twice by hand, or a future CI step re-running it) used to double the
+   block, because appendFile always adds regardless of what's already there.
+   Measured: task 0063 mục 9.3. Guarding on the exact block already being
+   present closes that without needing a separate "have I run" flag. */
+const HEADERS_BLOCK = `\n/*.md\n  Content-Type: text/plain; charset=utf-8\n`;
+const headersFile = path.join(OUT, "_headers");
+const existingHeaders = await readFile(headersFile, "utf8").catch(() => "");
+if (!existingHeaders.includes(HEADERS_BLOCK.trim())) {
+  await appendFile(headersFile, HEADERS_BLOCK, "utf8");
+}
 
 console.log(`[markdown] wrote ${written.length} pages into dist/client`);
