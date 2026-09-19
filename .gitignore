@@ -5,3 +5,8 @@ next-env.d.ts
 /dist/
 .vinext/
 .wrangler/
+
+# guard: downloaded npm tarballs + extracted packages, and per-run reports.
+# Re-downloaded by guard/check.mjs on every run — not source, not committed.
+/guard/.cache/
+/guard/last-run.json
