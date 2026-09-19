@@ -1,13 +1,13 @@
 ---
 title: Hook
-import: "@ecosy/schedule/hook"
+import: "@ecosy/core/schedule"
 order: 2
 ---
 
 # Hook
 
 ```ts
-import { Hook, LoggerHook } from "@ecosy/schedule/hook";
+import { Hook, LoggerHook } from "@ecosy/core/schedule";
 ```
 
 A hook is where run outcomes go. Optional — without one, a finished task
@@ -21,10 +21,15 @@ Schedule()
 ## `Hook`
 
 ```ts
-interface Hook {
-  notify(event: TaskEvent): Promisable<void>;
+interface HookPort<Context> {
+  notify(event: TaskEvent, context: Context): Promisable<void>;
 }
 ```
+
+`context` is whatever `Schedule({ … })` injected — the same object a
+handler's `run` receives. An implementation only needs the parameters it
+reads, so a hook that never looks at `context` can leave it off, the way
+`TelegramHook` does below.
 
 One hook, not a list — `combine` turns several into one, so nothing downstream
 ever branches on how many there are.
@@ -32,7 +37,7 @@ ever branches on how many there are.
 `.hook()` takes a **class**; the scheduler constructs it at `start()`.
 
 ```ts
-class TelegramHook implements Hook {
+class TelegramHook implements HookPort {
   async notify(event: TaskEvent) {
     if (event.ok) return;
     await fetch(`https://api.telegram.org/bot${TOKEN}/sendMessage`, {
@@ -54,7 +59,7 @@ once per retry. For per-attempt reporting use
 ## `LoggerHook(logger?)`
 
 ```ts
-function LoggerHook(logger?: { info(...a: unknown[]): void; error(...a: unknown[]): void }): ClassType<Hook>
+function LoggerHook(logger?: { info(...a: unknown[]): void; error(...a: unknown[]): void }): ClassType<HookPort>
 ```
 
 Writes each outcome as a log line. Defaults to `console`, so it works before
@@ -75,12 +80,12 @@ Note it is a **factory** — `LoggerHook()` returns the class. Passing
 hook.
 
 Anything with `info` and `error` works, including a
-[`@ecosy/logger`](/logger) instance.
+[`@ecosy/core/logger`](/logger) instance.
 
 ## `Hook.combine`
 
 ```ts
-Hook.combine(...hooks: ClassType<Hook>[]): ClassType<Hook>
+Hook.combine(...hooks: ClassType<HookPort>[]): ClassType<HookPort>
 ```
 
 Fans one event out to several hooks, as a single hook class.

@@ -1,13 +1,13 @@
 ---
 title: Source
-import: "@ecosy/schedule/source"
+import: "@ecosy/core/schedule"
 order: 1
 ---
 
 # Source
 
 ```ts
-import { Source, FileSource, HttpSource, LineParser } from "@ecosy/schedule/source";
+import { Source, FileSource, HttpSource, LineParser } from "@ecosy/core/schedule";
 ```
 
 A source says **where task definitions come from**. It is the one required
@@ -30,7 +30,7 @@ interface SourceAdapter<Entry = string, Context = unknown> {
   read(context: Context): Promisable<Entry[]>;
 }
 
-type Source<Entry = string, Context = unknown> = ClassType<SourceAdapter<Entry, Context>>;
+type SourceClass<Entry = string, Context = unknown> = ClassType<SourceAdapter<Entry, Context>>;
 ```
 
 `.source()` takes a **class**, not a callback, so nothing in the scheduler has

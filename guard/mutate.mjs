@@ -286,6 +286,51 @@ cases.push({
   },
 });
 
+// M7 — entrypoint coverage must stay per-PACKAGE even once a package spans
+// several content groups (B2b, 2026-09-19: @ecosy/core's `logger` and
+// `schedule` entries live under their own top-level /logger and /schedule
+// groups, not content/core/). checkEntryPoints() now pools every group that
+// shares an npm name before judging coverage, so that a sibling group's page
+// can satisfy an entry the "core" group itself never mentions — the exact
+// fix this case exists to prove didn't go too far. A subpath that NO group
+// sharing the package's npm documents must still be MISSING-ENTRYPOINT; if
+// pooling silently marks everything covered just because the npm now has
+// several groups, this case survives and the "fix" made the guard blind
+// instead of accurate.
+cases.push({
+  name: "M7 entrypoint: a multi-group package (@ecosy/core) still flags a subpath NO sibling group documents",
+  expectKind: "MISSING-ENTRYPOINT",
+  // Not a page path: /core/cache already carries three real, pre-existing
+  // MISSING-ENTRYPOINT findings (crypt/queue/csrf), so checking by page alone
+  // would "pass" even if this mutation's own entry were silently swallowed by
+  // pooling. hasFinding()'s second branch matches ANY substring in the
+  // finding line, so the mutated entry's own name is the actually-specific
+  // signal — it can only appear in the `"entry":"turbocharge-core"` field
+  // this mutation introduces.
+  expectPage: "turbocharge-core",
+  setup() {
+    const cacheDir = freshCacheCopy();
+    const pkgRoot = findCachedPackageDir(cacheDir, "@ecosy/core");
+    // Novel name and novel export key — not reused from /core, /logger or
+    // /schedule (checked by hand against all three), so pooling their text
+    // cannot accidentally satisfy it the way "batch"/"session" incidentally
+    // do for two of the pre-existing, real gaps.
+    fs.writeFileSync(
+      path.join(pkgRoot, "dist", "turbocharge-core.d.ts"),
+      "export declare function turbochargeCoreExclusiveApi(): void;\n",
+    );
+    const pjFile = path.join(pkgRoot, "package.json");
+    const pj = JSON.parse(fs.readFileSync(pjFile, "utf8"));
+    pj.exports["./turbocharge-core"] = {
+      types: "./dist/turbocharge-core.d.ts",
+      import: "./dist/turbocharge-core.d.ts",
+      require: "./dist/turbocharge-core.d.ts",
+    };
+    fs.writeFileSync(pjFile, JSON.stringify(pj, null, 2));
+    return { args: ["--skip-live", "--skip-live-ok"], env: { GUARD_CACHE_DIR: cacheDir } };
+  },
+});
+
 // M5 — llms.txt (an off-page copy) drops one real page from its own link
 // list, drifting from content/ without anything on an actual page changing.
 cases.push({

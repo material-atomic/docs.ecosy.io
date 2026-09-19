@@ -462,10 +462,34 @@ function checkEntryPoints(groups, surfaces) {
   const npmBySlug = {};
   for (const g of Object.values(groups)) if (g.meta.npm) npmBySlug[g.slug] = g.meta.npm;
 
+  // One npm package can now be taught across SEVERAL content groups — the
+  // core-consolidation move (B2b, 2026-09-19) put `@ecosy/core`'s `logger`
+  // and `schedule` entries under their own top-level /logger and /schedule
+  // groups rather than folding them into content/core/. The old version of
+  // this function judged coverage per GROUP (`surfaces[g.meta.npm]` inside a
+  // per-group loop), which silently assumed one npm name = one group; once
+  // that broke, every entry the "core" group itself doesn't mention (crypt,
+  // queue, cache, …) got re-flagged as missing AGAIN from the "logger" and
+  // "schedule" groups' own narrow text — 20 brand-new false MISSING-ENTRYPOINT
+  // findings for entries that were never in either page's job to cover.
+  // Coverage has to be judged against the POOLED text of every group that
+  // shares the package's npm name, not one group alone.
+  const groupsByNpm = {};
   for (const g of Object.values(groups)) {
-    const surface = surfaces[g.meta.npm];
+    if (!g.meta.npm) continue;
+    (groupsByNpm[g.meta.npm] ??= []).push(g);
+  }
+
+  for (const [npm, npmGroups] of Object.entries(groupsByNpm)) {
+    const surface = surfaces[npm];
     if (!surface) continue;
-    const fullText = g.pages.map((p) => p.body).join("\n");
+    const fullText = npmGroups.flatMap((g) => g.pages.map((p) => p.body)).join("\n");
+    // Anchor page for reporting: the group whose own slug matches the
+    // package's bare name (core, http, …) when one exists, else whichever
+    // group was seen first — purely cosmetic, does not affect the check.
+    const bareName = npm.replace(/^@[^/]+\//, "");
+    const anchorGroup = npmGroups.find((g) => g.slug === bareName) || npmGroups[0];
+    const allPages = npmGroups.flatMap((g) => g.pages.map((p) => p.href));
 
     const ids = new Set();
     for (const key of surface.entries) {
@@ -484,18 +508,21 @@ function checkEntryPoints(groups, surfaces) {
       // names (an unrelated React integration, not the same functionality
       // moved). Only an actual surface-name intersection with the OTHER
       // package's own exports says "this is really the same API, taught
-      // twice" — the real case (@ecosy/core absorbing @ecosy/logger and
-      // @ecosy/schedule: 40/40 and 34/34 names in common).
+      // twice". Once `/logger` and `/schedule` themselves declare
+      // `npm: "@ecosy/core"`, `otherPkg` for their own slugs equals `npm`
+      // (the package being checked) — no longer "another" package — so this
+      // no longer fires for them; it still fires for a genuine cross-package
+      // coincidence like `@ecosy/styled`'s `./react` vs `@ecosy/react`'s page.
       const firstSeg = id.split("/")[0];
       const otherPkg = npmBySlug[firstSeg];
-      const otherSurface = otherPkg && otherPkg !== g.meta.npm ? surfaces[otherPkg] : null;
+      const otherSurface = otherPkg && otherPkg !== npm ? surfaces[otherPkg] : null;
       const overlap = otherSurface && info ? [...info.names].filter((n) => otherSurface.allNames.has(n)) : [];
 
       if (otherSurface && overlap.length > 0) {
         boundary.push({
           kind: "ENTRYPOINT-OVERLAPS-PACKAGE",
           page: groups[firstSeg].pages[0].href,
-          pkg: g.meta.npm,
+          pkg: npm,
           entry: id,
           taughtAsPackage: otherPkg,
           overlap: overlap.length,
@@ -513,7 +540,7 @@ function checkEntryPoints(groups, surfaces) {
       const nameHit = info && [...info.names].some((n) => wordIn(fullText, n));
       const idHit = wordIn(fullText, id.split("/").pop());
       if (!nameHit && !idHit)
-        bad.push({ kind: "MISSING-ENTRYPOINT", page: g.pages[0].href, pkg: g.meta.npm, entry: id, pages: g.pages.map((p) => p.href) });
+        bad.push({ kind: "MISSING-ENTRYPOINT", page: anchorGroup.pages[0].href, pkg: npm, entry: id, pages: allPages });
     }
   }
 

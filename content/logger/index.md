@@ -1,20 +1,20 @@
 ---
-name: "@ecosy/logger"
+name: "@ecosy/core/logger"
 type: module
 status: stable
-repo: material-atomic/ecosy-logger
-npm: "@ecosy/logger"
+repo: material-atomic/ecosy-core
+npm: "@ecosy/core"
 summary: A logger built from a format and a set of deliveries — ten wire standards, any destination.
 ---
 
-# @ecosy/logger
+# @ecosy/core/logger
 
 ```bash
-yarn add @ecosy/logger
+yarn add @ecosy/core
 ```
 
 ```ts
-import { Logger } from "@ecosy/logger";
+import { Logger } from "@ecosy/core/logger";
 
 const AppLogger = Logger("JSON");
 const logger = new AppLogger();
@@ -209,9 +209,9 @@ matching the level and spreads an array payload, so `TEXT` renders as if you
 had called `console.log` directly.
 
 ```ts
-import { ConsoleDelivery } from "@ecosy/logger";
+import { ConsoleDelivery } from "@ecosy/core/logger";
 
-Logger({ standard: "JSON", deliveries: [new ConsoleDelivery(), new HttpDelivery(url)] });
+Logger("JSON", [new ConsoleDelivery(), new HttpDelivery(url)]);
 ```
 
 Deliveries run in order, and each is isolated: one that **throws**, or whose
@@ -278,10 +278,10 @@ formatters share.
 ## Subpath imports
 
 ```ts
-import { Logger } from "@ecosy/logger/logger";
-import { ConsoleDelivery } from "@ecosy/logger/deliveries/console";
-import { JsonFormatter } from "@ecosy/logger/formatters/json";
+import { Logger } from "@ecosy/core/logger/logger";
+import { ConsoleDelivery } from "@ecosy/core/logger/deliveries/console";
+import { JsonFormatter } from "@ecosy/core/logger/formatters/json";
 ```
 
-Every module is reachable on its own path, so a build that needs one formatter
-does not carry the other nine.
+Every module is reachable on its own path under `@ecosy/core/logger/*`, so a
+build that needs one formatter does not carry the other nine.

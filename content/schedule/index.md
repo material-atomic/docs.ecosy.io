@@ -1,16 +1,16 @@
 ---
-name: "@ecosy/schedule"
+name: "@ecosy/core/schedule"
 type: module
 status: beta
-repo: material-atomic/ecosy-schedule
-npm: "@ecosy/schedule"
+repo: material-atomic/ecosy-core
+npm: "@ecosy/core"
 summary: Cron scheduling driven by a data source — handlers, HTTP calls or scripts, with retries, coordination and hooks.
 ---
 
-# @ecosy/schedule
+# @ecosy/core/schedule
 
 ```bash
-yarn add @ecosy/schedule
+yarn add @ecosy/core
 ```
 
 Runs cron tasks whose definitions come from a **source** — a database table, a
@@ -18,14 +18,13 @@ file, an HTTP endpoint — rather than from code. Editing a row changes the
 schedule; no deploy.
 
 ```ts
-import { Schedule, Registry } from "@ecosy/schedule";
-import { Hook } from "@ecosy/schedule/hook";
+import { Schedule, Registry, Hook } from "@ecosy/core/schedule";
 
 export const AppSchedule = Schedule({ db: DataSource })
   .source(CronTableSource)
   .task(RowParser)
   .registry(Registry.add(SessionCleanup))
-  .hook(Hook.combine(LoggerHook, TelegramHook))
+  .hook(Hook.combine(LoggerHook(), TelegramHook))
   .retry(2)
   .sync(30_000)
   .cascade("drain");
@@ -221,7 +220,7 @@ An `api` target is answered outside 2xx → `reason: "status"`.
 ## Registry
 
 ```ts
-import { Registry } from "@ecosy/schedule";
+import { Registry } from "@ecosy/core/schedule";
 ```
 
 A source entry is text, so it cannot carry a function — only a key naming one.
